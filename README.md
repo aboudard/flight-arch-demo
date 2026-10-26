@@ -1,0 +1,602 @@
+# Flight Arch Demo — une architecture Angular « prête pour l'IA »
+
+Projet de démonstration inspiré du webinar de **Manfred Steyer** (Angular Architects) sur le
+développement assisté par IA **sans dégrader l'architecture**.
+
+> Les agents IA sont optimisés pour **produire du code**, pas pour **respecter votre architecture**.
+> Une grande force sans plan est inutile (cf. les 3 000 policiers de *The Dark Knight Rises*).
+> On leur donne donc : des **règles** découvertes à la demande, des **vérifications déterministes**,
+> des **garde-fous** automatiques et du **contexte ciblé**.
+
+| Thème | Ce que montre la démo | Outils |
+|---|---|---|
+| 1. Définir l'architecture | Verticales par domaine, couches, feature slicing, conventions de nommage | Structure de dossiers, NgRx Signal Store |
+| 2. Décrire l'architecture pour l'IA | `AGENTS.md` court + documents chargés à la demande (*progressive disclosure*) | `AGENTS.md`, `docs/` |
+| 3. Faire respecter l'architecture | Violations détectées dans l'IDE, en CLI et en CI | **Sheriff**, **ArchUnitTS**, ESLint |
+| 4. Garde-fous pour l'agent | Le *stop hook* relance l'agent tant que les vérifications échouent | Hooks Claude Code / Codex / JSON |
+| 5. Contexte à la demande | Skills (officiels Angular + maison) et serveurs MCP | `npx skills`, Angular CLI MCP, **Detective** |
+| 6. Loop engineering (AFK) | Tickets affinés puis implémentés en boucle avec revue automatique | **Sandcastle**, skill `refine-ticket` |
+
+---
+
+## Sommaire
+
+1. [Démarrage rapide](#1-démarrage-rapide)
+2. [Structure du projet](#2-structure-du-projet)
+3. [Définir l'architecture](#3-définir-larchitecture)
+4. [Sheriff — frontières et règles de dépendances](#4-sheriff--frontières-et-règles-de-dépendances)
+5. [ArchUnitTS — conventions de nommage](#5-archunitts--conventions-de-nommage)
+6. [Le modèle du gruyère et `run-checks`](#6-le-modèle-du-gruyère-et-run-checks)
+7. [Stop hooks](#7-stop-hooks)
+8. [AGENTS.md et progressive disclosure](#8-agentsmd-et-progressive-disclosure)
+9. [Skills](#9-skills)
+10. [Serveurs MCP : Angular CLI et Detective](#10-serveurs-mcp--angular-cli-et-detective)
+11. [Loop engineering avec Sandcastle](#11-loop-engineering-avec-sandcastle)
+12. [Script de démonstration (≈ 30 min)](#12-script-de-démonstration--30-min)
+13. [Appliquer à un projet existant](#13-appliquer-à-un-projet-existant)
+14. [Limites et points d'attention](#14-limites-et-points-dattention)
+15. [Références](#15-références)
+
+---
+
+## 1. Démarrage rapide
+
+**Prérequis** : Node.js 22+, npm 10+, git. Facultatif : Claude Code (hooks, skills, MCP),
+Docker (Sandcastle).
+
+```bash
+npm install          # installe les dépendances et copie les skills vers .claude/skills
+npm start            # http://localhost:4200
+npm run check        # Sheriff + ESLint + tests d'architecture (≈ 15 s)
+npm run check:full   # + tests unitaires + build
+```
+
+Versions utilisées : Angular 22.2, NgRx Signals 22, Sheriff 0.20, ArchUnitTS 2.5,
+Detective 2.1, Sandcastle 0.12, Vitest 5.
+
+### Commandes npm
+
+| Commande | Rôle |
+|---|---|
+| `npm run lint` | ESLint, avec le plugin Sheriff |
+| `npm run sheriff:verify` / `sheriff:list` | Sheriff en CLI : vérification, ou liste des modules et de leurs tags |
+| `npm run test:arch` | Tests d'architecture (ArchUnitTS + Vitest) |
+| `npm test` | Tests unitaires Angular (Vitest) |
+| `npm run check` / `check:full` | Toutes les vérifications rapides / complètes |
+| `npm run detective` | Interface Detective (http://localhost:3334) |
+| `npm run detective:demo` | Detective en mode démo (auteurs fictifs pour la vue *team alignment*) |
+| `npm run demo:break-domain` | Violation : `ticketing` importe directement `luggage` |
+| `npm run demo:break-layer` | Violation : un composant UI injecte un store |
+| `npm run demo:break-naming` | Violation : `*-coordinator` renommé en `*-store` |
+| `npm run demo:reset` | Restaure les fichiers d'origine |
+| `npm run tickets` | Liste des tickets `ready`, au format JSON (utilisée par Sandcastle) |
+| `npm run sandcastle` | Lance la boucle AFK (Docker requis) |
+
+---
+
+## 2. Structure du projet
+
+```
+.
+├── AGENTS.md                      # Instructions agents (court, < 100 lignes)
+├── CLAUDE.md                      # Pointeur vers AGENTS.md (@AGENTS.md)
+├── sheriff.config.ts              # Tags des dossiers + règles de dépendances
+├── eslint.config.js               # ESLint + plugin Sheriff
+├── vitest.arch.config.mts         # Config Vitest dédiée aux tests d'architecture
+├── architecture/
+│   └── conventions.arch.spec.ts   # Tests ArchUnitTS (conventions de nommage)
+├── docs/
+│   ├── architecture/              # Règles détaillées (chargées à la demande)
+│   ├── adr/                       # Architecture Decision Records
+│   └── domains/                   # Contexte métier par domaine
+├── scripts/
+│   ├── run-checks.mjs             # Vérifications déterministes
+│   ├── hooks/                     # Adaptateurs de stop hooks
+│   ├── demo/scenario.mjs          # Violations volontaires pour la démo
+│   ├── copy-skills.mjs            # .agents/skills → .claude/skills
+│   └── tickets.mjs                # Mini-tracker de tickets pour Sandcastle
+├── .claude/settings.json          # Déclaration du stop hook pour Claude Code
+├── .mcp.json                      # Serveurs MCP : angular-cli, detective
+├── .agents/skills/                # Skills (dossier canonique)
+├── .detective/config.json         # Configuration de Detective
+├── .sandcastle/                   # Boucle AFK (prompts, Dockerfile, main.mts)
+├── tickets/                       # Backlog de tickets (story, scope, critères)
+└── src/app/
+    ├── app.ts, app.routes.ts      # Shell : ne charge que des features
+    └── domains/
+        ├── ticketing/             # Domaine principal
+        │   ├── feature-booking/       flight-search, booking-summary, flight-store, passenger-store
+        │   ├── feature-my-tickets/    my-tickets-page, ticket-store
+        │   ├── ui-flight/             flight-card (dumb)
+        │   ├── data/                  flight-client, flight (modèle)
+        │   ├── util-format/           format-route
+        │   └── api/                   ticketing-api.ts (API publique du domaine)
+        ├── luggage/
+        │   ├── feature-luggage/       luggage-list-page, luggage-store
+        │   └── data/                  luggage-client, luggage
+        └── shared/
+            ├── ui-design/             status-badge
+            └── util-config/           simulated-latency
+```
+
+L'application tourne sans backend : les clients renvoient des données en mémoire avec une
+latence simulée.
+
+---
+
+## 3. Définir l'architecture
+
+### 3.1 Verticales : « de bonnes clôtures font de bons voisins »
+
+Chaque **domaine** (`ticketing`, `luggage`) est une verticale peu couplée aux autres. Les
+bénéfices :
+
+- on modifie un domaine sans casser les autres ;
+- une équipe peut se concentrer sur un domaine. La **charge cognitive** baisse, pour les humains
+  comme pour la fenêtre de contexte d'un LLM.
+
+`shared` est traité **comme un domaine** par Sheriff, ce qui évite de dupliquer les règles. Il
+doit rester **petit et technique**, sinon il devient un fourre-tout.
+
+### 3.2 Couches et feature slicing
+
+| Dossier | Tag | Contenu | Peut importer |
+|---|---|---|---|
+| `feature-*` | `type:feature` | Composants smart, stores locaux, coordinators | ui, data, util, api |
+| `ui-*` | `type:ui` | Composants « dumb » réutilisables | data (modèles), util, api |
+| `data` | `type:data` | Clients et modèles partagés par plusieurs features | util, api |
+| `util-*` | `type:util` | Fonctions pures | — |
+| `api` | `type:api` | Réexports choisis pour les autres domaines | ui, data, util |
+
+**Principe de localité** : *aussi local que possible, aussi global que nécessaire.*
+
+- `flight-store.ts` sert une seule feature : il reste **dans** `feature-booking`.
+- `flight-client.ts` sert **deux** features (`booking` et `my-tickets`) : il a été descendu
+  dans `ticketing/data`.
+- `luggage` a besoin d'éléments de `ticketing` : il passe **uniquement** par
+  `ticketing/api/ticketing-api.ts`. C'est une API publique minimale, qui doit rester
+  rétrocompatible.
+
+### 3.3 Conventions de nommage porteuses de sens
+
+Angular a abandonné les suffixes `.component` et `.service`, mais recommande de définir **ses
+propres conventions, plus riches en sens** :
+
+| Suffixe | Rôle | Exemple |
+|---|---|---|
+| `-page`, `-search`, `-edit` | Composant smart | `flight-search.ts`, `booking-summary-page.ts` |
+| `-store` | NgRx Signal Store | `flight-store.ts` |
+| `-client` | Accès aux données | `flight-client.ts` |
+| `-coordinator` | Orchestre plusieurs stores | `booking-summary-coordinator.ts` |
+
+### 3.4 NgRx Signal Store
+
+Les stores utilisent `signalStore`, `withState`, `withComputed`, `withMethods`, `withHooks`,
+`patchState` et `rxMethod`.
+
+- Un store global à une feature est déclaré avec `{ providedIn: 'root' }` (exemple :
+  `FlightStore`).
+- Un store lié à un écran est fourni dans les `providers` du composant (exemple : `TicketStore`).
+- Ces stores sont des services légers. Quand un cas d'usage en combine plusieurs, on passe par
+  un **coordinator** (`BookingSummaryCoordinator`) plutôt que de faire dépendre un store d'un
+  autre.
+
+---
+
+## 4. Sheriff — frontières et règles de dépendances
+
+[Sheriff](https://sheriff.softarc.io/) applique des frontières de modules **par dossier** dans
+n'importe quel projet TypeScript (Angular CLI ou Nx). Il n'a aucune dépendance et fournit un
+plugin ESLint ainsi qu'un CLI.
+
+### Installation (déjà faite)
+
+```bash
+npm install -D @softarc/sheriff-core @softarc/eslint-plugin-sheriff
+```
+
+### Configuration : [`sheriff.config.ts`](sheriff.config.ts)
+
+```ts
+export const config: SheriffConfig = {
+  entryFile: 'src/main.ts',
+  enableBarrelLess: true,
+  modules: {
+    'src/app/domains/<domain>': {
+      'feature-<feature>': ['domain:<domain>', 'type:feature'],
+      'ui-<ui>':           ['domain:<domain>', 'type:ui'],
+      data:                ['domain:<domain>', 'type:data'],
+      'util-<util>':       ['domain:<domain>', 'type:util'],
+      api:                 ['domain:<domain>', 'type:api'],
+    },
+  },
+  depRules: {
+    'domain:*': [sameTag, 'domain:shared', 'type:api'],
+    'type:feature': ['type:ui', 'type:data', 'type:util', 'type:api'],
+    'type:api': ['type:ui', 'type:data', 'type:util'],
+    'type:ui': ['type:data', 'type:util', 'type:api'],
+    'type:data': ['type:util', 'type:api'],
+    'type:util': [],
+    root: ['type:feature'],
+  },
+};
+```
+
+Pour lire cette configuration :
+
+- **Placeholders** : `<domain>` est remplacé par le nom réel du dossier. Par exemple,
+  `src/app/domains/ticketing/feature-booking` reçoit les tags `domain:ticketing` et
+  `type:feature`.
+- **`depRules`** : pour chaque tag du module qui importe, la liste des tags qu'il a le droit
+  d'importer. Tous les tags de l'appelant doivent être satisfaits.
+- **`sameTag`** : un domaine ne peut accéder qu'à lui-même (`domain:ticketing` vers
+  `domain:ticketing`).
+- **`enableBarrelLess`** : pas besoin de fichier `index.ts` dans chaque module. Seul un
+  sous-dossier `internal/` serait encapsulé (barrel-less est le mode recommandé par la doc).
+- **`root`** : les fichiers hors modules (`app.ts`, `app.routes.ts`) ne peuvent charger que des
+  features.
+
+```bash
+npx sheriff list     # modules détectés et leurs tags
+npx sheriff verify   # rapport de violations (rapide : chaque fichier n'est lu qu'une fois)
+npx sheriff export > graph.json
+```
+
+### Intégration ESLint : [`eslint.config.js`](eslint.config.js)
+
+```js
+const sheriff = require('@softarc/eslint-plugin-sheriff');
+// …
+{ files: ['src/**/*.ts'], extends: [sheriff.configs.all] },
+```
+
+Les erreurs s'affichent **dans l'IDE pendant la frappe** et avec `npm run lint` :
+
+```
+error  module /src/app/domains/ticketing/feature-booking cannot access
+/src/app/domains/luggage/data. Tag domain:ticketing has no clearance for
+tags domain:luggage, type:data   @softarc/sheriff/dependency-rule
+```
+
+> 💡 **Performance** : sur une très grosse base de code, ESLint relit les fichiers à chaque
+> frappe. Le CLI `sheriff verify` est bien plus rapide : c'est lui qu'utilise `run-checks`.
+
+---
+
+## 5. ArchUnitTS — conventions de nommage
+
+[ArchUnitTS](https://lukasniessen.github.io/ArchUnitTS/) (`npm i -D archunit`) est un portage
+TypeScript d'ArchUnit, bien connu dans l'écosystème Java. Il permet d'écrire l'architecture sous
+forme de **tests unitaires**.
+
+Fichier : [`architecture/conventions.arch.spec.ts`](architecture/conventions.arch.spec.ts),
+exécuté avec Vitest via [`vitest.arch.config.mts`](vitest.arch.config.mts)
+(`globals: true` est requis par ArchUnitTS).
+
+| Règle | Implémentation |
+|---|---|
+| Seuls les stores accèdent aux clients | `projectFiles().withName(<ni store ni client>).shouldNot().dependOnFiles().withName(/-client\.ts$/)` |
+| Seuls les composants smart et les coordinators accèdent aux stores | même principe avec `/-store\.ts$/` |
+| Un store n'importe jamais un autre store | `withName(/-store\.ts$/).should().adhereTo(fichier => !importeUnStore(fichier))` |
+| Pas de cycles | `inFolder('src/app/**').should().haveNoCycles()` |
+
+> ℹ️ Pour la règle « store vers store », on utilise `adhereTo` (règle personnalisée) plutôt que
+> `dependOnFiles`, car ce dernier signale aussi l'auto-référence d'un fichier.
+
+```bash
+npm run test:arch
+```
+
+---
+
+## 6. Le modèle du gruyère et `run-checks`
+
+Métaphore empruntée à l'ingénierie de la sécurité : chaque tranche a des trous, mais pas aux
+mêmes endroits.
+
+1. **Les règles et le prompt** (`AGENTS.md`, `docs/`) : indispensables, mais l'agent peut les
+   ignorer, surtout quand sa fenêtre de contexte est chargée.
+2. **Sheriff** : frontières de domaines et de couches.
+3. **ArchUnitTS** : conventions de nommage et règles d'accès.
+4. **Tests unitaires et build**.
+
+Les scénarios de démo montrent la complémentarité des tranches :
+
+| Scénario | Sheriff | ArchUnitTS |
+|---|---|---|
+| `demo:break-domain` (ticketing importe luggage) | ❌ détecté | ✅ ne voit rien |
+| `demo:break-layer` (un composant UI injecte un store) | ❌ détecté | ❌ détecté |
+| `demo:break-naming` (coordinator renommé en store) | ✅ ne voit rien | ❌ détecté |
+
+[`scripts/run-checks.mjs`](scripts/run-checks.mjs) regroupe ces tranches :
+
+- les étapes **rapides** (Sheriff, ESLint, ArchUnitTS) sont utilisées par le stop hook ;
+- les étapes **lentes** (tests unitaires, build) sont ajoutées avec `--full`.
+
+Le script est utilisable en CLI, en CI et depuis les hooks : la fonction `runChecks({ full,
+capture })` est exportée.
+
+---
+
+## 7. Stop hooks
+
+Un **stop hook** est une commande que l'agent exécute **quand il pense avoir terminé**. Si les
+vérifications échouent, le message d'erreur est renvoyé au modèle, qui doit refaire un tour.
+
+Chaque agent a sa propre configuration et son propre contrat de retour :
+
+| Agent | Succès | Échec | Adaptateur |
+|---|---|---|---|
+| Claude Code, Codex | exit 0 | exit **2** + message sur **stderr** | [`stop-hook-exit-code.mjs`](scripts/hooks/stop-hook-exit-code.mjs) |
+| Cursor, Antigravity… | exit 0 + `{}` sur stdout | exit 0 + **JSON** avec la raison | [`stop-hook-json.mjs`](scripts/hooks/stop-hook-json.mjs) |
+
+Le principe : **une seule implémentation des vérifications** (`run-checks.mjs`) et de petits
+**adaptateurs** par famille d'agents.
+
+### Claude Code : [`.claude/settings.json`](.claude/settings.json)
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node scripts/hooks/stop-hook-exit-code.mjs", "timeout": 180 }] }
+    ]
+  }
+}
+```
+
+**Garde-fou anti-boucle** : après 3 échecs consécutifs, le hook laisse l'agent s'arrêter et
+demande une intervention humaine. Le compteur est stocké dans `node_modules/.cache/stop-hook`.
+
+> ⚠️ Le JSON produit par `stop-hook-json.mjs` est **générique**. Adaptez la fonction
+> `toAgentResponse()` au format exact attendu par votre agent et sa version (voir sa
+> documentation).
+
+Pour tester le hook à la main :
+
+```bash
+npm run demo:break-naming
+echo '{}' | node scripts/hooks/stop-hook-exit-code.mjs; echo "exit=$?"   # → exit=2 + rapport
+npm run demo:reset
+```
+
+---
+
+## 8. AGENTS.md et progressive disclosure
+
+La fenêtre de contexte est limitée. Même quand elle est immense en théorie, plus on la remplit,
+moins le modèle repère ce qui compte (les informations « au milieu » sont moins bien prises en
+compte). On applique donc la **progressive disclosure** : `AGENTS.md` ne contient que des
+**déclencheurs** et des **pointeurs**.
+
+```markdown
+- Avant d'ajouter ou de déplacer un composant, un client ou un helper :
+  lis `docs/architecture/boundaries.md`.
+- Avant toute modification touchant à l'état : lis `docs/architecture/state-management.md`.
+- Travail dans un domaine précis : lis `docs/domains/<domaine>.md`.
+```
+
+Plusieurs niveaux d'indirection sont possibles : `AGENTS.md` → `docs/architecture/boundaries.md`
+→ `docs/adr/0001-…md` (le *pourquoi* d'une décision).
+
+**Deux consignes jugées indispensables par l'auteur du webinar** :
+
+1. *« Ne jamais modifier ni proposer de modifier les règles d'architecture. »* Sans cette phrase,
+   l'agent est tenté d'assouplir la règle pour faire passer son code.
+2. *« Demander l'accord explicite de l'utilisateur avant d'ajouter quoi que ce soit à
+   `shared`. »* Sans elle, tout finit peu à peu dans `shared`.
+
+`AGENTS.md` (format multi-agents) contient aussi les bonnes pratiques Angular générées par
+`ng new`. `CLAUDE.md` se contente de l'importer (`@AGENTS.md`), ce qui garantit que Claude Code le
+charge.
+
+---
+
+## 9. Skills
+
+Un **skill** est un fichier `SKILL.md` avec un en-tête (`name`, `description`) :
+
+1. l'agent ne lit que la **description** pour savoir que le skill existe ;
+2. il charge le contenu complet seulement si la tâche s'y prête.
+
+C'est aussi de la progressive disclosure.
+
+| Skill | Origine | Rôle |
+|---|---|---|
+| `angular-developer`, `angular-new-app` | Officiels Angular | Angular moderne (signals, control flow…), indépendamment de la date d'entraînement du modèle |
+| `architecture-review` | Maison | Revue au regard des règles du projet, plus `npm run check` |
+| `domain-boundaries-review` | Maison | Sémantique DDD et analyse forensique via le MCP Detective |
+| `refine-ticket` | Maison (inspiré de *grill me* de Matt Pocock) | Questions jusqu'à compréhension partagée, puis décisions écrites dans le ticket |
+
+### Installer ou mettre à jour les skills officiels Angular
+
+```bash
+npx skills add https://github.com/angular/skills -s '*' -a codex -y --copy
+```
+
+`npx skills` est une sorte de « npm pour les skills ». La version installée est tracée dans
+`skills-lock.json`.
+
+### `.agents/skills` → `.claude/skills`
+
+Le dossier **canonique** est `.agents/skills`, mais Claude Code lit `.claude/skills`.
+[`scripts/copy-skills.mjs`](scripts/copy-skills.mjs) recopie l'un dans l'autre à chaque
+`npm install` (script `prepare`), ou à la demande avec `npm run skills:sync`. On copie plutôt que
+de créer des liens symboliques, plus fragiles sous Windows et Git Bash. `.claude/skills/` est
+ignoré par git.
+
+> Réflexe recommandé : quand vous installez une bibliothèque (composants, graphiques…),
+> vérifiez si elle publie des skills.
+
+---
+
+## 10. Serveurs MCP : Angular CLI et Detective
+
+Le **Model Context Protocol** fournit du contexte et des outils **à la demande** : le serveur
+annonce ses capacités, puis l'agent appelle les outils dont il a besoin.
+
+Fichier [`.mcp.json`](.mcp.json) :
+
+```json
+{
+  "mcpServers": {
+    "angular-cli": { "command": "npx", "args": ["-y", "@angular/cli", "mcp"] },
+    "detective":   { "command": "npx", "args": ["detective", "--mcp"] }
+  }
+}
+```
+
+### Angular CLI MCP
+
+Il donne accès à la documentation officielle, à des **exemples de référence** (les agents
+travaillent très bien par imitation) et aux migrations. Gardez-le configuré même si l'agent sait
+lancer `ng` : le CLI seul ne donne accès ni à la documentation ni aux exemples.
+
+### Detective : analyse forensique
+
+[Detective](https://github.com/angular-architects/detective) (`npm i -D @softarc/detective`)
+analyse la structure **et l'historique git** :
+
+| Analyse | Ce qu'elle révèle |
+|---|---|
+| Structure / couplage | Modules, domaines, couches et dépendances entre eux |
+| **Change coupling** | Domaines qui **changent ensemble** sans s'importer : couplage logique caché |
+| **Team alignment** | Une équipe travaille-t-elle dans une seule verticale ? (nécessite `teams` dans la config) |
+| **Hotspots** | Fichiers à la fois complexes et souvent modifiés : risque de bugs élevé |
+
+```bash
+npm run detective        # interface web sur http://localhost:3334
+npm run detective:demo   # ajoute des auteurs fictifs pour illustrer la vue team alignment
+```
+
+Configuration : [`.detective/config.json`](.detective/config.json). Elle contient les `scopes`
+(les domaines analysés), les `teams`, les `aliases` (plusieurs identités git pour une même
+personne) et un `filter` (exclusion des `*.spec.ts`).
+
+En mode MCP (`--mcp`), Detective expose notamment les outils `modules_get`, `coupling_get`,
+`changeCoupling_get`, `teamAlignment_get`, `hotspots_find` et `cache_update`. Le skill
+`domain-boundaries-review` les orchestre.
+
+> ℹ️ Ce dépôt de démo n'a que quelques commits : les vues *change coupling* et *hotspots*
+> deviennent vraiment parlantes sur un projet réel avec un historique riche.
+
+---
+
+## 11. Loop engineering avec Sandcastle
+
+Le principe est le « loin du clavier » (AFK) : on prépare un backlog, on lance la boucle, on
+revient relire les commits.
+
+```
+ticket suivant → branche (git worktree) → implémentation → revue par une autre session → fusion
+```
+
+La **revue automatique par une autre session** est ce qui fait la qualité. Selon l'expérience
+présentée dans le webinar, même un petit modèle rapide obtient de bons résultats grâce à elle.
+
+### Étape 1 : affiner les tickets (avant de partir)
+
+Les questions doivent être posées **avant** la boucle. Le format de ticket est inspiré de
+l'agilité : la story est une invitation à la conversation.
+
+```
+tickets/NNN-*.md
+---
+id / title / status (draft | ready | done) / depends_on
+---
+## Story   ## Scope   ## Critères d'acceptation   ## Décisions
+```
+
+Dans Claude Code : `refine ticket 004`. L'agent demande s'il faut passer par l'**API du domaine
+ticketing** ou par `shared`, puis consigne la réponse dans `## Décisions`.
+`refine ticket 005` doit, lui, être **refusé**, car ce ticket demande de renommer un coordinator
+en store.
+
+### Étape 2 : lancer la boucle
+
+[Sandcastle](https://github.com/mattpocock/sandcastle) (`@ai-hero/sandcastle`) a été initialisé
+avec le template **`parallel-planner-with-review`** :
+
+1. un **planificateur** lit les tickets `ready`, construit le graphe de dépendances et
+   sélectionne ceux qui peuvent avancer en parallèle (ici 001 et 002 ; 003 dépend de 001) ;
+2. pour chaque ticket : sandbox Docker, **worktree** et branche dédiés, **implémentation**, puis
+   **revue** dans la même sandbox ;
+3. une **fusion** des branches qui ont produit des commits, avec fermeture des tickets ;
+4. on recommence tant qu'il reste des tickets débloqués.
+
+Le tracker « Custom » de Sandcastle a été branché sur le dossier `tickets/` via
+[`scripts/tickets.mjs`](scripts/tickets.mjs) (`list`, `view`, `close`). Les prompts
+(`.sandcastle/*-prompt.md`) imposent de lire `AGENTS.md` et de faire passer
+`npm run check:full`.
+
+```bash
+cp .sandcastle/.env.example .sandcastle/.env   # renseigner CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ou ANTHROPIC_API_KEY
+npx sandcastle docker build-image
+npm run sandcastle
+```
+
+> 💰 **Coûts** : le template utilise Opus pour toutes les phases. Pour une démo, remplacez le
+> modèle dans `.sandcastle/main.mts` (`claudeCode("…")`) par un modèle moins coûteux. Dans une
+> sandbox Docker, l'agent utilise généralement une **clé API**, facturée à l'usage, et non
+> l'abonnement Claude.
+
+---
+
+## 12. Script de démonstration (≈ 30 min)
+
+| # | Durée | Action | Message clé |
+|---|---|---|---|
+| 1 | 3 min | Montrer l'app (`npm start`) puis l'arborescence `src/app/domains` | Verticales, couches, localité (`flight-store` reste dans sa feature, `flight-client` descendu dans `data`) |
+| 2 | 3 min | Ouvrir `sheriff.config.ts`, lancer `npx sheriff list` | Tags par placeholders, règles concises |
+| 3 | 4 min | `npm run demo:break-domain`, ouvrir `flight-search.ts` dans l'IDE (soulignement rouge), puis `npm run lint` et `npm run test:arch` | Sheriff détecte, ArchUnit ne voit rien. `npm run demo:reset` |
+| 4 | 3 min | `npm run demo:break-naming` puis `npm run check` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. `npm run demo:reset` |
+| 5 | 2 min | `npm run demo:break-layer` puis `npm run check` | Les deux tranches détectent. `npm run demo:reset` |
+| 6 | 4 min | Montrer `AGENTS.md` puis `docs/architecture/*`, `.claude/settings.json` et le hook | Progressive disclosure, consignes non négociables, contrat exit 2 / stderr |
+| 7 | 4 min | Dans Claude Code : *« Renomme booking-summary-coordinator en booking-summary-store »* | L'agent lit `state-management.md` et **refuse**. Variante : désactiver la consigne pour montrer le stop hook qui le renvoie au travail |
+| 8 | 4 min | `npm run detective` (vues coupling, team alignment) ; dans Claude Code : *« Review the domain boundaries »* | Skill et MCP Detective : rapport de revue |
+| 9 | 3 min | `refine ticket 004`, puis présenter `.sandcastle/main.mts` (et `npm run sandcastle` si Docker est disponible) | Questions avant la boucle, puis boucle AFK avec revue |
+
+---
+
+## 13. Appliquer à un projet existant
+
+1. **Commencer par l'analyse** : lancer Detective et le skill `domain-boundaries-review` pour
+   repérer où des verticales apporteraient le plus.
+2. **Adopter Sheriff progressivement** :
+   - commencer par `npx sheriff init` (étiquetage automatique, sans règles) ;
+   - utiliser `noTag` dans les `depRules` pour tolérer l'existant ;
+   - resserrer domaine par domaine. Jamais de big bang.
+3. **Écrire les règles pour les humains et l'IA** : un `AGENTS.md` court et des documents
+   détaillés, qui doivent rester **cohérents avec la configuration Sheriff et les tests
+   ArchUnit**.
+4. **Brancher `run-checks` en CI** et en stop hook.
+5. Les couches proposées sont une **règle empirique**, pas une loi de la nature. Les ajuster
+   (par exemple une couche `sub-feature`) est possible, à condition que ce soit une **décision
+   délibérée**, prise en équipe et consignée dans un ADR.
+
+---
+
+## 14. Limites et points d'attention
+
+- **Formats des hooks** : le contrat exit 2 / stderr de Claude Code est utilisé tel quel. Le
+  format JSON des autres agents doit être vérifié dans leur documentation. Aucun fichier de
+  configuration Codex, Cursor ou Antigravity n'est fourni.
+- **Boucle infinie** : un stop hook qui échoue toujours peut relancer l'agent sans fin. C'est
+  pourquoi l'adaptateur s'arrête après 3 tentatives.
+- **Coût des tokens** : les boucles AFK et les revues multiplient les appels.
+- **Sandcastle** : la configuration est en place et le point d'entrée compile, mais la boucle n'a
+  pas été exécutée ici (elle nécessite Docker et un jeton).
+- **Le fichier `shared`** doit être surveillé : c'est la principale source de dérive.
+
+---
+
+## 15. Références
+
+- Webinar : *AI-assisted development without destroying your architecture*, Manfred Steyer
+  (Angular Architects)
+- Sheriff : https://sheriff.softarc.io/ (voir *Dependency Rules*, *Module Boundaries*, *CLI*)
+- ArchUnitTS : https://lukasniessen.github.io/ArchUnitTS/
+- Detective : https://github.com/angular-architects/detective
+- NgRx Signal Store : https://ngrx.io/guide/signals/signal-store
+- Sandcastle : https://github.com/mattpocock/sandcastle
+- Skills officiels Angular : https://angular.dev/ai/agent-skills
