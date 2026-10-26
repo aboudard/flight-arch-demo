@@ -1,0 +1,25 @@
+{
+  "scopes": [
+    "src/app/domains/ticketing",
+    "src/app/domains/luggage",
+    "src/app/domains/shared"
+  ],
+  "groups": [
+    "src/app/domains"
+  ],
+  "entries": [],
+  "filter": {
+    "files": [
+      "**/*.ts",
+      "!**/*.spec.ts"
+    ],
+    "logs": []
+  },
+  "aliases": {},
+  "teams": {
+    "team-booking": [
+      "Flight Arch Demo"
+    ],
+    "team-luggage": []
+  }
+}
