@@ -1,0 +1,7 @@
+# Fins de ligne LF partout : le projet est aussi exécuté sous Linux / WSL / Docker
+# (Dockerfile, scripts shell, scripts Node avec shebang).
+* text=auto eol=lf
+
+*.ico binary
+*.png binary
+*.jpg binary

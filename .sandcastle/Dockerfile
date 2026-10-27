@@ -25,6 +25,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Add Claude to PATH
 ENV PATH="/home/agent/.local/bin:$PATH"
 
+# Économie de tokens : dans la sandbox, ne pas charger le serveur MCP Detective
+# déclaré dans .mcp.json (seul le skill de revue des domaines en a besoin, hors boucle AFK).
+# Paramètre utilisateur de Claude Code : disabledMcpjsonServers.
+RUN mkdir -p /home/agent/.claude \
+  && echo '{ "disabledMcpjsonServers": ["detective"] }' > /home/agent/.claude/settings.json
+
 WORKDIR /home/agent
 
 # In worktree sandbox mode, Sandcastle bind-mounts the git worktree at /home/agent/workspace

@@ -18,4 +18,4 @@ Le reviewer charge ce fichier pendant la revue (via @.sandcastle/CODING_STANDARD
 ## Tests
 
 - Chaque critère d'acceptation testable est couvert par un test unitaire.
-- `npm run check:full` doit passer.
+- `npm run check:full:quiet` doit passer.

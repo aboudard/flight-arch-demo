@@ -1,34 +1,27 @@
-// Parallel Planner with Review — four-phase orchestration loop
+// Parallel Planner with Review — boucle AFK (template Sandcastle, adapté au projet)
 //
-// This template drives a multi-phase workflow:
-//   Phase 1 (Plan):             An opus agent analyzes open issues, builds a
-//                               dependency graph, and outputs a <plan> JSON
-//                               listing unblocked issues with branch names.
-//   Phase 2 (Execute + Review): For each issue, a sandbox is created via
-//                               createSandbox(). The implementer runs first
-//                               (100 iterations). If it produces commits, a
-//                               reviewer runs in the same sandbox on the same
-//                               branch (1 iteration). All issue pipelines run
-//                               concurrently via Promise.allSettled().
-//   Phase 3 (Merge):            A single agent merges all completed branches
-//                               into the current branch.
+//   Phase 1 (Plan)             : un agent lit les tickets `ready`, construit le graphe de
+//                                dépendances et renvoie un <plan> JSON des tickets débloqués.
+//   Phase 2 (Implement+Review) : pour chaque ticket, une sandbox Docker + un worktree/branche.
+//                                L'implémenteur travaille, puis un relecteur (nouvelle session)
+//                                revoit le diff dans la même sandbox.
+//   Phase 3 (Merge)            : un agent fusionne les branches qui ont produit des commits.
 //
-// The outer loop repeats up to MAX_ITERATIONS times so that newly unblocked
-// issues are picked up after each round of merges.
+// Usage (depuis WSL / Linux / macOS, Docker requis) :
+//   npm run sandcastle                 → boucle complète
+//   npm run sandcastle:smoke           → un seul tour, ticket 002 uniquement (test de coût)
+//   npx tsx .sandcastle/main.mts --only=001,002
 //
-// Usage:
-//   npx tsx .sandcastle/main.mts
-// Or add to package.json:
-//   "scripts": { "sandcastle": "npx tsx .sandcastle/main.mts" }
+// Maîtrise des tokens (voir docs/run-sandcastle-wsl.md) :
+//   - plafonds d'itérations bas (MAX_ROUNDS, IMPLEMENTER_MAX_ITERATIONS) ;
+//   - un modèle par rôle, surchargeable par variables d'environnement ;
+//   - rapport de consommation par session en fin de run (.sandcastle/logs/usage-report.json).
 
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 
-// The planner emits its plan as JSON inside <plan> tags; Output.object extracts
-// and validates it against this schema. We use Zod here, but any Standard
-// Schema validator works just as well — Valibot, ArkType, etc. See
-// https://standardschema.dev.
 const planSchema = z.object({
   issues: z.array(
     z.object({ id: z.string(), title: z.string(), branch: z.string() }),
@@ -39,188 +32,250 @@ const planSchema = z.object({
 // Configuration
 // ---------------------------------------------------------------------------
 
-// Maximum number of plan→execute→merge cycles before stopping.
-// Raise this if your backlog is large; lower it for a quick smoke-test run.
-const MAX_ITERATIONS = 10;
-
-// Hooks run inside the sandbox before the agent starts each iteration.
-// npm install ensures the sandbox always has fresh dependencies.
-const hooks = {
-  sandbox: { onSandboxReady: [{ command: "npm install" }] },
+// Modèles par rôle. L'implémentation est la phase qui bénéficie le plus d'un
+// modèle fort ; planification, relecture et fusion sont des tâches plus courtes.
+// Surcharge possible : SANDCASTLE_IMPLEMENTER_MODEL=... npm run sandcastle
+const MODELS = {
+  planner: process.env.SANDCASTLE_PLANNER_MODEL ?? "claude-sonnet-4-6",
+  implementer: process.env.SANDCASTLE_IMPLEMENTER_MODEL ?? "claude-opus-4-8",
+  reviewer: process.env.SANDCASTLE_REVIEWER_MODEL ?? "claude-sonnet-4-6",
+  merger: process.env.SANDCASTLE_MERGER_MODEL ?? "claude-sonnet-4-6",
 };
 
-// Copy node_modules from the host into the worktree before each sandbox
-// starts. Avoids a full npm install from scratch; the hook above handles
-// platform-specific binaries and any packages added since the last copy.
+// Nombre maximal de tours plan → implement → merge.
+// 3 suffisent pour le backlog de démo (001+002, puis 003, puis arrêt).
+const MAX_ROUNDS = Number(process.env.SANDCASTLE_MAX_ROUNDS ?? 3);
+
+// Une « itération » = un NOUVEAU lancement de l'agent, qui relit tout son contexte.
+// Normalement 1 ou 2 suffisent ; le template proposait 100, ce qui expose à une
+// consommation très élevée si l'agent n'émet jamais <promise>COMPLETE</promise>.
+const IMPLEMENTER_MAX_ITERATIONS = Number(
+  process.env.SANDCASTLE_IMPLEMENTER_MAX_ITERATIONS ?? 5,
+);
+
+// --only=002,003 : ne traiter que ces tickets, et un seul tour (test de coût).
+const onlyArg = process.argv.find((a) => a.startsWith("--only="));
+const ONLY = onlyArg ? onlyArg.slice("--only=".length).split(",").map((s) => s.trim()) : null;
+
+const hooks = {
+  sandbox: { onSandboxReady: [{ command: "npm install --no-audit --no-fund" }] },
+};
+
 const copyToWorktree = ["node_modules"];
 
 // ---------------------------------------------------------------------------
-// Main loop
+// Rapport de consommation
 // ---------------------------------------------------------------------------
 
-for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
-  console.log(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
+type Usage = { input: number; cacheWrite: number; cacheRead: number; output: number };
+type UsageEntry = Usage & { session: string; iterations: number };
+const usageReport: UsageEntry[] = [];
 
-  // -------------------------------------------------------------------------
-  // Phase 1: Plan
-  //
-  // The planning agent (opus, for deeper reasoning) reads the open issue list,
-  // builds a dependency graph, and selects the issues that can be worked in
-  // parallel right now (i.e., no blocking dependencies on other open issues).
-  //
-  // It outputs a <plan> JSON block — Output.object parses and validates it.
-  // -------------------------------------------------------------------------
-  const plan = await sandcastle.run({
-    hooks,
-    sandbox: docker(),
-    name: "planner",
-    // One iteration is enough: the planner just needs to read and reason,
-    // not write code. (Structured output requires maxIterations: 1.)
-    maxIterations: 1,
-    // Opus for planning: dependency analysis benefits from deeper reasoning.
-    agent: sandcastle.claudeCode("claude-opus-4-8"),
-    promptFile: "./.sandcastle/plan-prompt.md",
-    // Extract and validate the <plan> JSON into a typed object. Throws
-    // StructuredOutputError if the tag is missing, the JSON is malformed, or
-    // validation fails — which aborts the loop.
-    output: sandcastle.Output.object({ tag: "plan", schema: planSchema }),
-  });
-
-  const issues = plan.output.issues;
-
-  if (issues.length === 0) {
-    // No unblocked work — either everything is done or everything is blocked.
-    console.log("No unblocked issues to work on. Exiting.");
-    break;
+// Additionne l'usage de chaque message assistant du fichier de session Claude
+// (JSONL capturé sur l'hôte). Les messages répétés (même id) ne comptent qu'une fois.
+function sumSessionUsage(file: string | undefined): Usage {
+  const total: Usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
+  if (!file || !existsSync(file)) return total;
+  const seen = new Set<string>();
+  for (const line of readFileSync(file, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    let entry: any;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const message = entry?.message;
+    const usage = message?.usage;
+    if (entry?.type !== "assistant" || !usage) continue;
+    const id = message.id ?? entry.uuid;
+    if (id && seen.has(id)) continue;
+    if (id) seen.add(id);
+    total.input += usage.input_tokens ?? 0;
+    total.cacheWrite += usage.cache_creation_input_tokens ?? 0;
+    total.cacheRead += usage.cache_read_input_tokens ?? 0;
+    total.output += usage.output_tokens ?? 0;
   }
+  return total;
+}
 
-  console.log(
-    `Planning complete. ${issues.length} issue(s) to work in parallel:`,
+function recordUsage(
+  session: string,
+  result: { iterations: { sessionFilePath?: string }[] },
+): void {
+  const entry: UsageEntry = {
+    session,
+    iterations: result.iterations.length,
+    input: 0,
+    cacheWrite: 0,
+    cacheRead: 0,
+    output: 0,
+  };
+  for (const iteration of result.iterations) {
+    const u = sumSessionUsage(iteration.sessionFilePath);
+    entry.input += u.input;
+    entry.cacheWrite += u.cacheWrite;
+    entry.cacheRead += u.cacheRead;
+    entry.output += u.output;
+  }
+  usageReport.push(entry);
+}
+
+function printUsageReport(): void {
+  if (usageReport.length === 0) return;
+  const fmt = (n: number) => n.toLocaleString("fr-FR");
+  console.log("\n=== Consommation de tokens par session ===");
+  console.table(
+    usageReport.map((e) => ({
+      session: e.session,
+      iterations: e.iterations,
+      input: fmt(e.input),
+      "cache write": fmt(e.cacheWrite),
+      "cache read": fmt(e.cacheRead),
+      output: fmt(e.output),
+    })),
   );
-  for (const issue of issues) {
-    console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
-  }
+  const totals = usageReport.reduce(
+    (acc, e) => ({
+      input: acc.input + e.input,
+      cacheWrite: acc.cacheWrite + e.cacheWrite,
+      cacheRead: acc.cacheRead + e.cacheRead,
+      output: acc.output + e.output,
+    }),
+    { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 },
+  );
+  console.log(
+    `Total : ${fmt(totals.input + totals.cacheWrite + totals.cacheRead)} tokens en entrée ` +
+      `(dont ${fmt(totals.cacheRead)} lus depuis le cache), ${fmt(totals.output)} en sortie.`,
+  );
+  mkdirSync(".sandcastle/logs", { recursive: true });
+  writeFileSync(
+    ".sandcastle/logs/usage-report.json",
+    JSON.stringify({ models: MODELS, sessions: usageReport, totals }, null, 2),
+  );
+  console.log("Détail : .sandcastle/logs/usage-report.json");
+}
 
-  // -------------------------------------------------------------------------
-  // Phase 2: Execute + Review
-  //
-  // For each issue, create a sandbox via createSandbox() so the implementer
-  // and reviewer share the same sandbox instance per branch. The implementer
-  // runs first; if it produces commits, the reviewer runs in the same sandbox.
-  //
-  // Promise.allSettled means one failing pipeline doesn't cancel the others.
-  // -------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Boucle principale
+// ---------------------------------------------------------------------------
 
-  const settled = await Promise.allSettled(
-    issues.map(async (issue) => {
-      const sandbox = await sandcastle.createSandbox({
-        branch: issue.branch,
-        sandbox: docker(),
-        hooks,
-        copyToWorktree,
-      });
+console.log("Modèles :", MODELS);
+if (ONLY) console.log(`Mode ciblé : tickets ${ONLY.join(", ")} uniquement, un seul tour.`);
 
-      try {
-        // Run the implementer
-        const implement = await sandbox.run({
-          name: "implementer",
-          maxIterations: 100,
-          agent: sandcastle.claudeCode("claude-opus-4-8"),
-          promptFile: "./.sandcastle/implement-prompt.md",
-          promptArgs: {
-            TASK_ID: issue.id,
-            ISSUE_TITLE: issue.title,
-            BRANCH: issue.branch,
-          },
+try {
+  for (let round = 1; round <= MAX_ROUNDS; round++) {
+    console.log(`\n=== Tour ${round}/${MAX_ROUNDS} ===\n`);
+
+    // Phase 1 : plan
+    const plan = await sandcastle.run({
+      hooks,
+      sandbox: docker(),
+      name: "planner",
+      maxIterations: 1,
+      agent: sandcastle.claudeCode(MODELS.planner),
+      promptFile: "./.sandcastle/plan-prompt.md",
+      output: sandcastle.Output.object({ tag: "plan", schema: planSchema }),
+    });
+    recordUsage(`planner (tour ${round})`, plan);
+
+    const issues = ONLY
+      ? plan.output.issues.filter((i) => ONLY.includes(i.id))
+      : plan.output.issues;
+
+    if (issues.length === 0) {
+      console.log("Aucun ticket débloqué à traiter. Fin.");
+      break;
+    }
+
+    console.log(`${issues.length} ticket(s) à traiter en parallèle :`);
+    for (const issue of issues) {
+      console.log(`  ${issue.id}: ${issue.title} → ${issue.branch}`);
+    }
+
+    // Phase 2 : implémentation + relecture
+    const settled = await Promise.allSettled(
+      issues.map(async (issue) => {
+        const sandbox = await sandcastle.createSandbox({
+          branch: issue.branch,
+          sandbox: docker(),
+          hooks,
+          copyToWorktree,
         });
 
-        // Only review if the implementer produced commits
-        if (implement.commits.length > 0) {
-          const review = await sandbox.run({
-            name: "reviewer",
-            maxIterations: 1,
-            agent: sandcastle.claudeCode("claude-opus-4-8"),
-            promptFile: "./.sandcastle/review-prompt.md",
+        try {
+          const implement = await sandbox.run({
+            name: "implementer",
+            maxIterations: IMPLEMENTER_MAX_ITERATIONS,
+            agent: sandcastle.claudeCode(MODELS.implementer),
+            promptFile: "./.sandcastle/implement-prompt.md",
             promptArgs: {
+              TASK_ID: issue.id,
+              ISSUE_TITLE: issue.title,
               BRANCH: issue.branch,
             },
           });
+          recordUsage(`implementer ${issue.id}`, implement);
 
-          // Merge commits from both runs so the merge phase sees all of them.
-          // Each sandbox.run() only returns commits from its own run.
-          return {
-            ...review,
-            commits: [...implement.commits, ...review.commits],
-          };
+          if (implement.commits.length > 0) {
+            const review = await sandbox.run({
+              name: "reviewer",
+              maxIterations: 1,
+              agent: sandcastle.claudeCode(MODELS.reviewer),
+              promptFile: "./.sandcastle/review-prompt.md",
+              promptArgs: { BRANCH: issue.branch },
+            });
+            recordUsage(`reviewer ${issue.id}`, review);
+
+            return { ...review, commits: [...implement.commits, ...review.commits] };
+          }
+
+          return implement;
+        } finally {
+          await sandbox.close();
         }
+      }),
+    );
 
-        return implement;
-      } finally {
-        await sandbox.close();
+    for (const [i, outcome] of settled.entries()) {
+      if (outcome.status === "rejected") {
+        console.error(`  ✗ ${issues[i]!.id} (${issues[i]!.branch}) a échoué : ${outcome.reason}`);
       }
-    }),
-  );
-
-  // Log any agents that threw (network error, sandbox crash, etc.).
-  for (const [i, outcome] of settled.entries()) {
-    if (outcome.status === "rejected") {
-      console.error(
-        `  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`,
-      );
     }
+
+    const completedIssues = settled
+      .map((outcome, i) => ({ outcome, issue: issues[i]! }))
+      .filter((e) => e.outcome.status === "fulfilled" && e.outcome.value.commits.length > 0)
+      .map((e) => e.issue);
+    const completedBranches = completedIssues.map((i) => i.branch);
+
+    console.log(`\n${completedBranches.length} branche(s) avec des commits :`);
+    for (const branch of completedBranches) console.log(`  ${branch}`);
+
+    if (completedBranches.length > 0) {
+      // Phase 3 : fusion
+      const merge = await sandcastle.run({
+        hooks,
+        sandbox: docker(),
+        name: "merger",
+        maxIterations: 1,
+        agent: sandcastle.claudeCode(MODELS.merger),
+        promptFile: "./.sandcastle/merge-prompt.md",
+        promptArgs: {
+          BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
+          ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+        },
+      });
+      recordUsage(`merger (tour ${round})`, merge);
+      console.log("\nBranches fusionnées.");
+    } else {
+      console.log("Aucun commit produit : rien à fusionner.");
+    }
+
+    if (ONLY) break;
   }
-
-  // Only pass branches that actually produced commits to the merge phase.
-  // An agent that ran successfully but made no commits has nothing to merge.
-  const completedIssues = settled
-    .map((outcome, i) => ({ outcome, issue: issues[i]! }))
-    .filter(
-      (entry) =>
-        entry.outcome.status === "fulfilled" &&
-        entry.outcome.value.commits.length > 0,
-    )
-    .map((entry) => entry.issue);
-
-  const completedBranches = completedIssues.map((i) => i.branch);
-
-  console.log(
-    `\nExecution complete. ${completedBranches.length} branch(es) with commits:`,
-  );
-  for (const branch of completedBranches) {
-    console.log(`  ${branch}`);
-  }
-
-  if (completedBranches.length === 0) {
-    // All agents ran but none made commits — nothing to merge this cycle.
-    console.log("No commits produced. Nothing to merge.");
-    continue;
-  }
-
-  // -------------------------------------------------------------------------
-  // Phase 3: Merge
-  //
-  // One agent merges all completed branches into the current branch,
-  // resolving any conflicts and running tests to confirm everything works.
-  //
-  // The {{BRANCHES}} and {{ISSUES}} prompt arguments are lists that the agent
-  // uses to know which branches to merge and which issues to close.
-  // -------------------------------------------------------------------------
-  await sandcastle.run({
-    hooks,
-    sandbox: docker(),
-    name: "merger",
-    maxIterations: 1,
-    agent: sandcastle.claudeCode("claude-opus-4-8"),
-    promptFile: "./.sandcastle/merge-prompt.md",
-    promptArgs: {
-      // A markdown list of branch names, one per line.
-      BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
-      // A markdown list of issue IDs and titles, one per line.
-      ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
-    },
-  });
-
-  console.log("\nBranches merged.");
+} finally {
+  printUsageReport();
 }
 
-console.log("\nAll done.");
+console.log("\nTerminé.");

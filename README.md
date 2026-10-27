@@ -63,6 +63,7 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 | `npm run test:arch` | Tests d'architecture (ArchUnitTS + Vitest) |
 | `npm test` | Tests unitaires Angular (Vitest) |
 | `npm run check` / `check:full` | Toutes les vérifications rapides / complètes |
+| `npm run check:quiet` / `check:full:quiet` | Idem, une ligne par étape et détails seulement en cas d'échec (utilisé par les agents) |
 | `npm run detective` | Interface Detective (http://localhost:3334) |
 | `npm run detective:demo` | Detective en mode démo (auteurs fictifs pour la vue *team alignment*) |
 | `npm run demo:break-domain` | Violation : `ticketing` importe directement `luggage` |
@@ -70,7 +71,9 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 | `npm run demo:break-naming` | Violation : `*-coordinator` renommé en `*-store` |
 | `npm run demo:reset` | Restaure les fichiers d'origine |
 | `npm run tickets` | Liste des tickets `ready`, au format JSON (utilisée par Sandcastle) |
-| `npm run sandcastle` | Lance la boucle AFK (Docker requis) |
+| `npm run sandcastle:build-image` | Construit l'image Docker de la sandbox |
+| `npm run sandcastle:smoke` | Boucle AFK limitée au ticket 002, un seul tour (test de coût) |
+| `npm run sandcastle` | Lance la boucle AFK complète (Docker requis, voir [docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)) |
 
 ---
 
@@ -88,12 +91,14 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 ├── docs/
 │   ├── architecture/              # Règles détaillées (chargées à la demande)
 │   ├── adr/                       # Architecture Decision Records
-│   └── domains/                   # Contexte métier par domaine
+│   ├── domains/                   # Contexte métier par domaine
+│   └── run-sandcastle-wsl.md      # Procédure Sandcastle depuis WSL (projet sous Windows)
 ├── scripts/
 │   ├── run-checks.mjs             # Vérifications déterministes
 │   ├── hooks/                     # Adaptateurs de stop hooks
 │   ├── demo/scenario.mjs          # Violations volontaires pour la démo
 │   ├── copy-skills.mjs            # .agents/skills → .claude/skills
+│   ├── wsl/setup-wsl-clone.sh     # Crée la copie d'exécution WSL
 │   └── tickets.mjs                # Mini-tracker de tickets pour Sandcastle
 ├── .claude/settings.json          # Déclaration du stop hook pour Claude Code
 ├── .mcp.json                      # Serveurs MCP : angular-cli, detective
@@ -529,16 +534,44 @@ Le tracker « Custom » de Sandcastle a été branché sur le dossier `tickets/`
 (`.sandcastle/*-prompt.md`) imposent de lire `AGENTS.md` et de faire passer
 `npm run check:full`.
 
+### Exécution
+
+Sandcastle a besoin de Docker. Quand le projet vit sous Windows et que Docker tourne dans WSL,
+suivez **[docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)**. En résumé :
+
 ```bash
-cp .sandcastle/.env.example .sandcastle/.env   # renseigner CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ou ANTHROPIC_API_KEY
-npx sandcastle docker build-image
-npm run sandcastle
+bash /mnt/c/…/flight-arch-demo/scripts/wsl/setup-wsl-clone.sh /mnt/c/…/flight-arch-demo ~/work/flight-arch-demo
+cd ~/work/flight-arch-demo
+# renseigner .sandcastle/.env : CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ou ANTHROPIC_API_KEY
+npm run sandcastle:build-image
+git switch -c afk-demo
+npm run sandcastle:smoke      # un ticket, un tour : mesurer le coût
+npm run sandcastle            # run complet
+git push origin afk-demo      # rapatrier la branche sous Windows
 ```
 
-> 💰 **Coûts** : le template utilise Opus pour toutes les phases. Pour une démo, remplacez le
-> modèle dans `.sandcastle/main.mts` (`claudeCode("…")`) par un modèle moins coûteux. Dans une
-> sandbox Docker, l'agent utilise généralement une **clé API**, facturée à l'usage, et non
-> l'abonnement Claude.
+### Maîtrise de la consommation de tokens
+
+Chaque session d'agent relit tout son contexte à chaque tour. Le backlog de démo déclenche environ
+**11 sessions** (6 au tour 1, 4 au tour 2, 1 au tour 3). Réglages appliqués dans
+`.sandcastle/main.mts` :
+
+| Réglage | Valeur | Surcharge |
+|---|---|---|
+| Tours plan → implement → merge | 3 (le template en prévoyait 10) | `SANDCASTLE_MAX_ROUNDS` |
+| Relances max de l'implémenteur | 5 (le template en prévoyait 100) | `SANDCASTLE_IMPLEMENTER_MAX_ITERATIONS` |
+| Modèles | Opus pour l'implémentation, Sonnet pour le plan, la relecture et la fusion | `SANDCASTLE_{PLANNER,IMPLEMENTER,REVIEWER,MERGER}_MODEL` |
+| Tickets ciblés | tous | `--only=002` (script `sandcastle:smoke`) |
+
+S'y ajoutent :
+
+- des vérifications silencieuses (`check:full:quiet`) dans les prompts ;
+- le serveur MCP Detective désactivé dans l'image de la sandbox ;
+- un **rapport de consommation** par session en fin de run, également écrit dans
+  `.sandcastle/logs/usage-report.json`.
+
+> 💰 Avec un jeton d'abonnement (`CLAUDE_CODE_OAUTH_TOKEN`), la consommation est décomptée des
+> limites de votre abonnement. Avec une **clé API**, elle est facturée à l'usage.
 
 ---
 
@@ -585,7 +618,9 @@ npm run sandcastle
   pourquoi l'adaptateur s'arrête après 3 tentatives.
 - **Coût des tokens** : les boucles AFK et les revues multiplient les appels.
 - **Sandcastle** : la configuration est en place et le point d'entrée compile, mais la boucle n'a
-  pas été exécutée ici (elle nécessite Docker et un jeton).
+  pas été exécutée de bout en bout (elle nécessite Docker, un accès à Docker Hub et un jeton).
+  Commencez par `npm run sandcastle:smoke` et lisez le rapport de consommation avant un run
+  complet.
 - **Le fichier `shared`** doit être surveillé : c'est la principale source de dérive.
 
 ---

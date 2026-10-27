@@ -35,7 +35,7 @@ If applicable, use RGR to complete the task.
 
 # FEEDBACK LOOPS
 
-Before committing, run `npm run check:full` (Sheriff, ESLint, architecture tests, unit tests, build). All checks must pass. Never edit `sheriff.config.ts`, `architecture/**` or `docs/architecture/**` to make them pass.
+Before committing, run `npm run check:full:quiet` (Sheriff, ESLint, architecture tests, unit tests, build — it prints one line per step and details only for failing steps). Do not run the individual tools with full output unless you need to debug a specific failure. All checks must pass. Never edit `sheriff.config.ts`, `architecture/**` or `docs/architecture/**` to make them pass.
 
 # COMMIT
 
