@@ -1,8 +1,9 @@
 import { Component, inject } from '@angular/core';
 import { PageHeader } from '../../shared/ui-design/page-header';
 import { BadgeTone, StatusBadge } from '../../shared/ui-design/status-badge';
-// ✅ Accès autorisé à un autre domaine : uniquement via son API publique.
-import { formatRoute } from '../../ticketing/api/ticketing-api';
+// ❌ Démo Sheriff : contourne l'API publique du domaine ticketing (dossier interne type:util).
+// Version conforme : import { formatRoute } from '../../ticketing/api/ticketing-api';
+import { formatRoute } from '../../ticketing/util-format/format-route';
 import { LuggageStatus } from '../data/luggage';
 import { LuggageStore } from './luggage-store';
 

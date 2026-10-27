@@ -36,9 +36,10 @@ export class BookingCoordinator {
   async confirm(): Promise<Ticket | null> {
     const flight = this.flight();
     if (!flight || !this.canConfirm()) return null;
-    const ticket = await this.passenger.book(flight);
+    // Le store va lui-même chercher le vol choisi (cf. passenger-store.ts, démo ArchUnit).
+    const ticket = await this.passenger.book();
+    if (!ticket) return null;
     this.passenger.reset();
-    this.flights.clearSelection();
     return ticket;
   }
 }
