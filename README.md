@@ -92,7 +92,7 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 │   ├── architecture/              # Règles détaillées (chargées à la demande)
 │   ├── adr/                       # Architecture Decision Records
 │   ├── domains/                   # Contexte métier par domaine
-│   └── run-sandcastle-wsl.md      # Procédure Sandcastle depuis WSL (projet sous Windows)
+│   └── run-sandcastle-wsl.md      # GitHub + Sandcastle depuis WSL (édition sous Windows)
 ├── scripts/
 │   ├── run-checks.mjs             # Vérifications déterministes
 │   ├── hooks/                     # Adaptateurs de stop hooks
@@ -536,18 +536,20 @@ Le tracker « Custom » de Sandcastle a été branché sur le dossier `tickets/`
 
 ### Exécution
 
-Sandcastle a besoin de Docker. Quand le projet vit sous Windows et que Docker tourne dans WSL,
-suivez **[docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)**. En résumé :
+Sandcastle a besoin de Docker. Le dépôt de référence est sur **GitHub** : on édite sous Windows et
+on lance Sandcastle depuis un **second clone dans WSL**. La procédure complète, y compris la
+publication initiale sur GitHub, est dans **[docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)**.
+En résumé :
 
 ```bash
-bash /mnt/c/…/flight-arch-demo/scripts/wsl/setup-wsl-clone.sh /mnt/c/…/flight-arch-demo ~/work/flight-arch-demo
+bash /mnt/c/…/flight-arch-demo/scripts/wsl/setup-wsl-clone.sh https://github.com/<compte>/<depot>.git ~/work/flight-arch-demo
 cd ~/work/flight-arch-demo
 # renseigner .sandcastle/.env : CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ou ANTHROPIC_API_KEY
 npm run sandcastle:build-image
 git switch -c afk-demo
 npm run sandcastle:smoke      # un ticket, un tour : mesurer le coût
 npm run sandcastle            # run complet
-git push origin afk-demo      # rapatrier la branche sous Windows
+git push -u origin afk-demo   # puis pull request afk-demo → main sur GitHub
 ```
 
 ### Maîtrise de la consommation de tokens

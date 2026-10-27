@@ -1,21 +1,30 @@
-# Lancer Sandcastle depuis WSL quand le projet vit sous Windows
+# Lancer Sandcastle depuis WSL, avec le dépôt sur GitHub
 
-Ce guide s'applique quand le dépôt de référence est sur le disque Windows
-(par exemple `C:\Factory\github\angular-architecture\flight-arch-demo`) et que Docker
-tourne dans WSL.
+Ce guide s'applique quand on travaille au quotidien sous Windows
+(par exemple dans `C:\Factory\github\angular-architecture\flight-arch-demo`), que le dépôt de
+référence est sur **GitHub**, et que Docker tourne dans WSL.
+
+> Dans les commandes ci-dessous, remplacez `<compte>/<depot>` par votre dépôt GitHub
+> (ex. `alainboudard/flight-arch-demo`). La branche principale s'appelle `main`.
 
 ## Principe
 
 ```
-Windows (dépôt de référence)                         WSL (copie d'exécution)
-C:\Factory\...\flight-arch-demo   ── git clone ──►   ~/work/flight-arch-demo
-        ▲                                                    │  npm run sandcastle
-        └──────────── git push origin afk-demo ◄─────────────┘  (Docker, worktrees)
+                         GitHub (dépôt de référence)
+                     github.com/<compte>/<depot>.git
+                    ▲   │                       ▲   │
+       git push     │   │ git pull    git push  │   │ git clone / git pull
+                    │   ▼                       │   ▼
+   Windows (édition, relecture)          WSL (exécution de Sandcastle)
+   C:\Factory\...\flight-arch-demo        ~/work/flight-arch-demo
+                                          npm run sandcastle (Docker, worktrees)
 ```
 
 - **Windows** reste l'endroit où vous éditez, relisez et commitez.
-- **WSL** héberge une **copie git** dédiée à l'exécution de Sandcastle. Les deux dépôts
-  échangent leurs commits par git : le dépôt Windows est le `origin` de la copie WSL.
+- **WSL** héberge un **second clone** du même dépôt GitHub, dédié à l'exécution de Sandcastle.
+- Les deux clones échangent leurs commits **via GitHub** : poussez d'un côté, tirez de l'autre.
+  Les branches produites par les agents (ex. `afk-demo`) peuvent être relues sous forme de
+  **pull request**.
 
 Pourquoi ne pas lancer Sandcastle directement sur `/mnt/c/...` ?
 
@@ -39,6 +48,7 @@ Pourquoi ne pas lancer Sandcastle directement sur `/mnt/c/...` ?
 | Accès Docker sans sudo | `docker run --rm hello-world` | Sinon : `sudo usermod -aG docker $USER`, puis fermer et rouvrir WSL |
 | Node.js 22+ et npm | `node -v` | Installé **dans WSL** (nvm conseillé), pas celui de Windows |
 | git | `git --version` | Configurer `user.name` et `user.email` dans WSL |
+| Accès GitHub en écriture | `git ls-remote https://github.com/<compte>/<depot>.git` | Voir « Authentification GitHub dans WSL » ci-dessous |
 | Claude Code CLI (facultatif) | `claude --version` | Seulement pour générer le jeton avec `claude setup-token` |
 
 Si `docker info` ne répond pas avec Docker Engine dans WSL, démarrez le service :
@@ -46,27 +56,69 @@ Si `docker info` ne répond pas avec Docker Engine dans WSL, démarrez le servic
 
 ---
 
-## Étape 0 — Sous Windows : committer
+## Mise en place initiale (une seule fois) — publier le projet sur GitHub
 
-La copie WSL est créée avec `git clone` : **elle ne contient que ce qui est commité**.
+### 1. Créer le dépôt sur GitHub
+
+Sur github.com : **New repository**, choisir un nom et la visibilité (privé conseillé).
+Ne cochez **ni README, ni .gitignore, ni licence** : le dépôt doit être **vide** pour accueillir
+l'historique existant.
+
+### 2. Sous Windows : remplacer l'ancien `origin` et pousser
+
+Le dépôt local a un `origin` qui pointe vers un chemin qui n'existe pas sur votre machine
+(c'est le dépôt d'origine de l'archive). On le remplace par GitHub :
 
 ```powershell
 cd C:\Factory\github\angular-architecture\flight-arch-demo
-git status
-git add -A
-git commit -m "…"
+git status                                   # tout doit être commité
+git branch -M main                           # renomme master en main (convention GitHub)
+git remote set-url origin https://github.com/<compte>/<depot>.git
+git push -u origin main
 ```
 
-Le fichier `.gitattributes` impose des fins de ligne LF. Le Dockerfile et les scripts restent
-donc utilisables sous Linux, même si votre git Windows convertit les fichiers en CRLF.
+L'authentification passe par **Git Credential Manager**, installé avec Git for Windows : une
+fenêtre de connexion GitHub s'ouvre au premier push.
 
-## Étape 1 — Dans WSL : créer la copie d'exécution
+> 💡 Les anciens commits ont pour auteur « Flight Arch Demo <demo@example.com> ». Ce n'est
+> pas bloquant ; vos prochains commits porteront votre identité git.
 
-Méthode assistée : le script vérifie les prérequis, clone, installe et prépare `.env`.
+### 3. Vérifier que rien de sensible n'est publié
+
+Les fichiers locaux sont déjà ignorés par `.gitignore` : `.sandcastle/.env` (jetons),
+`.sandcastle/logs/`, `.sandcastle/worktrees/`, `.claude/skills/` (copie générée),
+`node_modules/`, `.demo-backup`. Vérifiez avant le premier push :
+
+```powershell
+git ls-files | Select-String "\.env$"      # ne doit rien afficher
+```
+
+---
+
+## Authentification GitHub dans WSL
+
+Le clone WSL doit pouvoir **pousser** les branches produites par Sandcastle. Choisissez une option :
+
+- **Réutiliser Git Credential Manager de Windows** (le plus simple si Git for Windows est installé) :
+
+  ```bash
+  git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"
+  ```
+
+- **GitHub CLI dans WSL** : `gh auth login`, puis `gh auth setup-git`.
+- **Clé SSH** propre à WSL, ajoutée dans GitHub (*Settings → SSH and GPG keys*). Clonez alors
+  avec l'URL `git@github.com:<compte>/<depot>.git`.
+
+---
+
+## Étape 1 — Dans WSL : créer le clone d'exécution
+
+Méthode assistée : le script vérifie les prérequis, clone depuis GitHub, installe et prépare
+`.env`. Si le clone existe déjà, il le met à jour (`git pull`).
 
 ```bash
 bash /mnt/c/Factory/github/angular-architecture/flight-arch-demo/scripts/wsl/setup-wsl-clone.sh \
-  /mnt/c/Factory/github/angular-architecture/flight-arch-demo \
+  https://github.com/<compte>/<depot>.git \
   ~/work/flight-arch-demo
 ```
 
@@ -74,14 +126,15 @@ Méthode manuelle (équivalente) :
 
 ```bash
 mkdir -p ~/work
-git clone /mnt/c/Factory/github/angular-architecture/flight-arch-demo ~/work/flight-arch-demo
+git clone https://github.com/<compte>/<depot>.git ~/work/flight-arch-demo
 cd ~/work/flight-arch-demo
 npm ci                                # installe les dépendances Linux et copie les skills
 npm run check                         # Sheriff + ESLint + tests d'architecture
 cp .sandcastle/.env.example .sandcastle/.env
 ```
 
-> Le chemin Windows `C:\Factory\...` correspond à `/mnt/c/Factory/...` dans WSL.
+> Le clone WSL ne contient que ce qui a été **poussé sur GitHub**. Avant chaque session :
+> `git push` sous Windows, puis `git pull` dans WSL.
 
 ## Étape 2 — Identifiants de l'agent
 
@@ -128,28 +181,30 @@ npm run sandcastle
 Avec le backlog de démo : tour 1 = tickets 001 et 002 en parallèle, tour 2 = ticket 003,
 tour 3 = plus rien à faire, arrêt.
 
-## Étape 6 — Rapatrier le résultat sous Windows
+## Étape 6 — Publier et relire le résultat
 
 Dans WSL :
 
 ```bash
-git log --oneline master..afk-demo    # commits produits par les agents
-git push origin afk-demo              # envoie la branche dans le dépôt Windows
+git log --oneline main..afk-demo      # commits produits par les agents
+git push -u origin afk-demo           # publie la branche sur GitHub
 ```
 
-Sous Windows :
+Ensuite, au choix :
 
-```powershell
-git log --oneline afk-demo
-git diff master...afk-demo
-git switch afk-demo                   # pour lancer l'application et relire
-```
+- **Sur GitHub** : ouvrir une **pull request** `afk-demo → main` et relire le diff. C'est le plus
+  confortable pour relire du code produit par des agents.
+- **Sous Windows**, pour lancer l'application et tester :
 
-> On peut pousser vers le dépôt Windows parce que la branche `afk-demo` n'y est pas extraite.
-> Ne poussez pas vers la branche actuellement ouverte sous Windows.
+  ```powershell
+  git fetch origin
+  git switch afk-demo                 # crée la branche locale qui suit origin/afk-demo
+  npm install
+  npm start
+  ```
 
-Pour récupérer ensuite dans WSL des modifications faites sous Windows : `git pull` dans la copie
-WSL.
+Après fusion de la PR, mettez à jour les deux clones : `git switch main && git pull` sous Windows
+et dans WSL.
 
 ---
 
@@ -195,7 +250,9 @@ Autres mesures déjà en place :
 | Erreurs esbuild ou rollup « platform mismatch » | `node_modules` installé sous Windows | `rm -rf node_modules && npm ci` dans WSL |
 | `/bin/bash^M: bad interpreter` | Fins de ligne CRLF | `.gitattributes` l'évite ; sinon `git add --renormalize .` sous Windows puis recloner |
 | `StructuredOutputError` au démarrage | Le planificateur n'a pas produit de `<plan>` valide | Relancer, ou vérifier `.sandcastle/logs/*-planner.log` |
-| `! [remote rejected] … branch is currently checked out` | Push vers la branche ouverte sous Windows | Pousser une autre branche (ex. `afk-demo`) |
+| `Authentication failed` / `Permission denied (publickey)` au push depuis WSL | Pas d'identifiants GitHub dans WSL | Voir « Authentification GitHub dans WSL » |
+| `! [rejected] … (fetch first)` | GitHub contient des commits absents du clone | `git pull --rebase`, puis pousser à nouveau |
+| Le clone WSL ne voit pas une modification faite sous Windows | Pas encore poussée | `git push` sous Windows, puis `git pull` dans WSL |
 | Limite d'usage atteinte | Run trop long | Réduire les tickets (`--only`), les modèles ou les relances |
 
 ## Nettoyage
@@ -205,5 +262,6 @@ git worktree list                     # worktrees créés par Sandcastle
 git worktree prune
 git branch --list 'sandcastle/*'      # branches par ticket, à supprimer une fois fusionnées
 git branch -D sandcastle/issue-002
+git push origin --delete afk-demo   # une fois la PR fusionnée
 docker image rm sandcastle:flight-arch-demo
 ```
