@@ -18,6 +18,7 @@
     "skills:sync": "node scripts/copy-skills.mjs",
     "prepare": "node scripts/copy-skills.mjs",
     "demo:break-domain": "node scripts/demo/scenario.mjs break-domain",
+    "demo:break-api": "node scripts/demo/scenario.mjs break-api",
     "demo:break-layer": "node scripts/demo/scenario.mjs break-layer",
     "demo:break-naming": "node scripts/demo/scenario.mjs break-naming",
     "demo:reset": "node scripts/demo/scenario.mjs reset",

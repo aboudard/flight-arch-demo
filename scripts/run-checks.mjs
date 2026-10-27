@@ -9,23 +9,26 @@
  *                                            (économise des tokens quand un agent l'exécute)
  *
  * Utilisable en CLI, en CI, et depuis les adaptateurs de stop hooks.
+ *
+ * Les commandes elles-mêmes sont définies UNE SEULE FOIS, dans les scripts npm de
+ * package.json. Ce fichier ne fait qu'orchestrer ces scripts et ajoute ce qu'une
+ * simple chaîne `a && b && c` ne sait pas faire :
+ *   - exécuter TOUTES les étapes, même après un échec (rapport complet en un seul tour) ;
+ *   - capturer la sortie et produire un message court pour l'agent (--quiet, stop hooks).
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+/** Chaque étape = un script npm de package.json. */
 export const FAST_STEPS = [
-  { name: 'Sheriff (frontières de modules)', cmd: 'npx', args: ['sheriff', 'verify'] },
-  { name: 'ESLint (+ plugin Sheriff)', cmd: 'npx', args: ['ng', 'lint'] },
-  {
-    name: 'Tests d\'architecture (ArchUnitTS)',
-    cmd: 'npx',
-    args: ['vitest', 'run', '--config', 'vitest.arch.config.mts'],
-  },
+  { name: 'Sheriff (frontières de modules)', script: 'sheriff:verify' },
+  { name: 'ESLint (+ plugin Sheriff)', script: 'lint' },
+  { name: 'Tests d\'architecture (ArchUnitTS)', script: 'test:arch' },
 ];
 
 export const SLOW_STEPS = [
-  { name: 'Tests unitaires', cmd: 'npx', args: ['ng', 'test', '--watch=false'] },
-  { name: 'Build', cmd: 'npx', args: ['ng', 'build'] },
+  { name: 'Tests unitaires', script: 'test' },
+  { name: 'Build', script: 'build' },
 ];
 
 /**
@@ -37,8 +40,9 @@ export function runChecks({ full = false, capture = false } = {}) {
   const failures = [];
 
   for (const step of steps) {
-    if (!capture) console.log(`\n▶ ${step.name}`);
-    const result = spawnSync(step.cmd, step.args, {
+    if (!capture) console.log(`\n▶ ${step.name}  (npm run ${step.script})`);
+    // --silent : masque l'en-tête « > flight-arch-demo@0.0.0 … » de npm.
+    const result = spawnSync('npm', ['run', '--silent', step.script], {
       encoding: 'utf8',
       stdio: capture ? 'pipe' : 'inherit',
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', CI: 'true' },

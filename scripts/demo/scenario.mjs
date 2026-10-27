@@ -3,6 +3,7 @@
  * Introduit (puis annule) des violations volontaires pour la démo.
  *
  *   node scripts/demo/scenario.mjs break-domain   ticketing importe luggage (Sheriff)
+ *   node scripts/demo/scenario.mjs break-api      luggage contourne l'API publique de ticketing (Sheriff)
  *   node scripts/demo/scenario.mjs break-layer    un composant UI injecte un store (Sheriff + ArchUnit)
  *   node scripts/demo/scenario.mjs break-naming   coordinator renommé en store (ArchUnit)
  *   node scripts/demo/scenario.mjs reset          restaure les fichiers d'origine
@@ -38,6 +39,17 @@ const scenarios = {
       file,
       'protected readonly store = inject(FlightStore);',
       'protected readonly store = inject(FlightStore);\n  protected readonly lastLuggage: Luggage | null = null;',
+    );
+  },
+  'break-api'() {
+    // Même fonction, même comportement : seul le chemin d'import change.
+    // Sheriff refuse car luggage atteint un dossier interne de ticketing (type:util)
+    // au lieu de passer par son API publique (type:api).
+    edit(
+      `${SRC}/domains/luggage/feature-luggage/luggage-list-page.ts`,
+      "import { formatRoute } from '../../ticketing/api/ticketing-api';",
+      "// ❌ Violation : contourne l'API publique du domaine ticketing\n" +
+        "import { formatRoute } from '../../ticketing/util-format/format-route';",
     );
   },
   'break-layer'() {

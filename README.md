@@ -67,6 +67,7 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 | `npm run detective` | Interface Detective (http://localhost:3334) |
 | `npm run detective:demo` | Detective en mode démo (auteurs fictifs pour la vue *team alignment*) |
 | `npm run demo:break-domain` | Violation : `ticketing` importe directement `luggage` |
+| `npm run demo:break-api` | Violation : `luggage` contourne l'API publique de `ticketing` |
 | `npm run demo:break-layer` | Violation : un composant UI injecte un store |
 | `npm run demo:break-naming` | Violation : `*-coordinator` renommé en `*-store` |
 | `npm run demo:reset` | Restaure les fichiers d'origine |
@@ -266,6 +267,41 @@ tags domain:luggage, type:data   @softarc/sheriff/dependency-rule
 > 💡 **Performance** : sur une très grosse base de code, ESLint relit les fichiers à chaque
 > frappe. Le CLI `sheriff verify` est bien plus rapide : c'est lui qu'utilise `run-checks`.
 
+### À essayer : contourner l'API publique d'un domaine
+
+C'est la violation la plus simple à comprendre. Le domaine `luggage` affiche le trajet de chaque
+bagage avec `formatRoute`, une fonction du domaine `ticketing` qu'il obtient **par l'API
+publique** de ce domaine.
+
+1. Dans `src/app/domains/luggage/feature-luggage/luggage-list-page.ts`, remplacer l'import :
+
+   ```ts
+   // avant : via l'API publique de ticketing (autorisé)
+   import { formatRoute } from '../../ticketing/api/ticketing-api';
+
+   // après : directement dans un dossier interne de ticketing (interdit)
+   import { formatRoute } from '../../ticketing/util-format/format-route';
+   ```
+
+   C'est la **même fonction** et l'application se comporte exactement pareil : seul le chemin
+   change. Sheriff contrôle **où** le code va chercher ses dépendances, pas ce qu'il fait.
+2. Observer :
+   - dans l'éditeur, la ligne d'import est soulignée en rouge ;
+   - `npm run check` : Sheriff et ESLint échouent, les tests d'architecture passent.
+
+   ```
+   error  module /src/app/domains/luggage/feature-luggage cannot access
+   /src/app/domains/ticketing/util-format. Tag domain:luggage has no clearance
+   for tags domain:ticketing, type:util   @softarc/sheriff/dependency-rule
+   ```
+
+3. Comprendre : la règle `'domain:*': [sameTag, 'domain:shared', 'type:api']` n'autorise un
+   domaine à importer que lui-même, `shared` ou l'**API** d'un autre domaine. Le dossier visé
+   porte les tags `domain:ticketing` et `type:util` : aucune de ces conditions n'est remplie.
+4. Remettre l'import d'origine : tout redevient vert.
+
+Version automatique : `npm run demo:break-api`, puis `npm run demo:reset`.
+
 ---
 
 ## 5. ArchUnitTS — conventions de nommage
@@ -310,16 +346,32 @@ Les scénarios de démo montrent la complémentarité des tranches :
 | Scénario | Sheriff | ArchUnitTS |
 |---|---|---|
 | `demo:break-domain` (ticketing importe luggage) | ❌ détecté | ✅ ne voit rien |
+| `demo:break-api` (luggage contourne l'API de ticketing) | ❌ détecté | ✅ ne voit rien |
 | `demo:break-layer` (un composant UI injecte un store) | ❌ détecté | ❌ détecté |
 | `demo:break-naming` (coordinator renommé en store) | ✅ ne voit rien | ❌ détecté |
 
 [`scripts/run-checks.mjs`](scripts/run-checks.mjs) regroupe ces tranches :
 
-- les étapes **rapides** (Sheriff, ESLint, ArchUnitTS) sont utilisées par le stop hook ;
-- les étapes **lentes** (tests unitaires, build) sont ajoutées avec `--full`.
+- les étapes **rapides** (`sheriff:verify`, `lint`, `test:arch`) sont utilisées par le stop hook ;
+- les étapes **lentes** (`test`, `build`) sont ajoutées avec `--full`.
 
-Le script est utilisable en CLI, en CI et depuis les hooks : la fonction `runChecks({ full,
-capture })` est exportée.
+### Pourquoi un script plutôt qu'une chaîne de scripts npm ?
+
+Pour un humain, `npm run sheriff:verify && npm run lint && npm run test:arch` suffirait. Les
+**commandes** restent d'ailleurs définies à un seul endroit : les scripts npm de
+`package.json`. `run-checks.mjs` ne fait qu'**appeler ces scripts** (`npm run --silent <script>`)
+et ajoute ce qu'une chaîne `&&` ne sait pas faire :
+
+1. **Exécuter toutes les étapes, même après un échec.** `&&` s'arrête à la première erreur ;
+   l'agent ne découvrirait les autres problèmes qu'au tour suivant, ce qui coûte des tokens.
+2. **Produire un message court pour l'agent** : ce qui a échoué, les dernières lignes de sortie
+   et la consigne « corrige le code, pas les règles » (`--quiet`, stop hooks).
+3. **Être réutilisé** par le CLI, la CI et les deux adaptateurs de stop hooks : la fonction
+   `runChecks({ full, capture })` est exportée.
+
+Pour changer une commande (options d'ESLint, configuration Vitest…), modifiez **uniquement**
+`package.json`. Pour ajouter une étape, créez le script npm puis ajoutez une ligne
+`{ name, script }` dans `FAST_STEPS` ou `SLOW_STEPS`.
 
 ---
 
@@ -583,7 +635,7 @@ S'y ajoutent :
 |---|---|---|---|
 | 1 | 3 min | Montrer l'app (`npm start`) puis l'arborescence `src/app/domains` | Verticales, couches, localité (`flight-store` reste dans sa feature, `flight-client` descendu dans `data`) |
 | 2 | 3 min | Ouvrir `sheriff.config.ts`, lancer `npx sheriff list` | Tags par placeholders, règles concises |
-| 3 | 4 min | `npm run demo:break-domain`, ouvrir `flight-search.ts` dans l'IDE (soulignement rouge), puis `npm run lint` et `npm run test:arch` | Sheriff détecte, ArchUnit ne voit rien. `npm run demo:reset` |
+| 3 | 4 min | Modifier à la main l'import de `luggage-list-page.ts` (section 4, « À essayer »), constater le soulignement rouge dans l'IDE, puis `npm run check` | Même fonction, autre chemin : Sheriff refuse le contournement de l'API. Ensuite `npm run demo:break-domain` pour un second exemple. `npm run demo:reset` |
 | 4 | 3 min | `npm run demo:break-naming` puis `npm run check` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. `npm run demo:reset` |
 | 5 | 2 min | `npm run demo:break-layer` puis `npm run check` | Les deux tranches détectent. `npm run demo:reset` |
 | 6 | 4 min | Montrer `AGENTS.md` puis `docs/architecture/*`, `.claude/settings.json` et le hook | Progressive disclosure, consignes non négociables, contrat exit 2 / stderr |
