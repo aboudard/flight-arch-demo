@@ -27,9 +27,7 @@ et **feature slicing**. Ce fichier est volontairement court : les détails sont 
 ## Vérifications
 
 - `npm run check` : Sheriff + ESLint + tests d'architecture (lancé automatiquement par le stop hook).
-- `npm run check:full` : idem + tests unitaires + build. À lancer quand un ticket le demande.
-- Agents : préférer `npm run check:quiet` / `npm run check:full:quiet` (une ligne par étape,
-  détails seulement en cas d'échec) pour économiser le contexte.
+- `npm run check:full` : idem + tests unitaires + build. À lancer avant de considérer une tâche terminée.
 
 ## Qualité de code et commentaires
 

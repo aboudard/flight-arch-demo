@@ -13,9 +13,8 @@ développement assisté par IA **sans dégrader l'architecture**.
 | 1. Définir l'architecture | Verticales par domaine, couches, feature slicing, conventions de nommage | Structure de dossiers, NgRx Signal Store |
 | 2. Décrire l'architecture pour l'IA | `AGENTS.md` court + documents chargés à la demande (*progressive disclosure*) | `AGENTS.md`, `docs/` |
 | 3. Faire respecter l'architecture | Violations détectées dans l'IDE, en CLI et en CI | **Sheriff**, **ArchUnitTS**, ESLint |
-| 4. Garde-fous pour l'agent | Le *stop hook* relance l'agent tant que les vérifications échouent | Hooks Claude Code / Codex / JSON |
+| 4. Garde-fous pour l'agent | Le *stop hook* relance l'agent tant que les vérifications échouent | Hook Claude Code + `npm run check` |
 | 5. Contexte à la demande | Skills (officiels Angular + maison) et serveurs MCP | `npx skills`, Angular CLI MCP, **Detective** |
-| 6. Loop engineering (AFK) | Tickets affinés puis implémentés en boucle avec revue automatique | **Sandcastle**, skill `refine-ticket` |
 
 ---
 
@@ -26,33 +25,31 @@ développement assisté par IA **sans dégrader l'architecture**.
 3. [Définir l'architecture](#3-définir-larchitecture)
 4. [Sheriff — frontières et règles de dépendances](#4-sheriff--frontières-et-règles-de-dépendances)
 5. [ArchUnitTS — conventions de nommage](#5-archunitts--conventions-de-nommage)
-6. [Le modèle du gruyère et `run-checks`](#6-le-modèle-du-gruyère-et-run-checks)
+6. [Le modèle du gruyère](#6-le-modèle-du-gruyère)
 7. [Stop hooks](#7-stop-hooks)
 8. [AGENTS.md et progressive disclosure](#8-agentsmd-et-progressive-disclosure)
 9. [Skills](#9-skills)
 10. [Serveurs MCP : Angular CLI et Detective](#10-serveurs-mcp--angular-cli-et-detective)
-11. [Loop engineering avec Sandcastle](#11-loop-engineering-avec-sandcastle)
-12. [Script de démonstration (≈ 30 min)](#12-script-de-démonstration--30-min)
-13. [Appliquer à un projet existant](#13-appliquer-à-un-projet-existant)
-14. [Limites et points d'attention](#14-limites-et-points-dattention)
-15. [Références](#15-références)
+11. [Script de démonstration (≈ 30 min)](#11-script-de-démonstration--30-min)
+12. [Appliquer à un projet existant](#12-appliquer-à-un-projet-existant)
+13. [Limites et points d'attention](#13-limites-et-points-dattention)
+14. [Références](#14-références)
 
 ---
 
 ## 1. Démarrage rapide
 
-**Prérequis** : Node.js 22+, npm 10+, git. Facultatif : Claude Code (hooks, skills, MCP),
-Docker (Sandcastle).
+**Prérequis** : Node.js 22+, npm 10+, git. Facultatif : Claude Code (hooks, skills, MCP).
 
 ```bash
-npm install          # installe les dépendances et copie les skills vers .claude/skills
+npm install
 npm start            # http://localhost:4200
 npm run check        # Sheriff + ESLint + tests d'architecture (≈ 15 s)
 npm run check:full   # + tests unitaires + build
 ```
 
 Versions utilisées : Angular 22.2, NgRx Signals 22, Sheriff 0.20, ArchUnitTS 2.5,
-Detective 2.1, Sandcastle 0.12, Vitest 5.
+Detective 2.1, Vitest 5.
 
 ### Commandes npm
 
@@ -62,19 +59,10 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 | `npm run sheriff:verify` / `sheriff:list` | Sheriff en CLI : vérification, ou liste des modules et de leurs tags |
 | `npm run test:arch` | Tests d'architecture (ArchUnitTS + Vitest) |
 | `npm test` | Tests unitaires Angular (Vitest) |
-| `npm run check` / `check:full` | Toutes les vérifications rapides / complètes |
-| `npm run check:quiet` / `check:full:quiet` | Idem, une ligne par étape et détails seulement en cas d'échec (utilisé par les agents) |
+| `npm run check` | `sheriff:verify` puis `lint` puis `test:arch` (vérifications rapides, utilisées par le stop hook) |
+| `npm run check:full` | `check` puis tests unitaires puis build |
 | `npm run detective` | Interface Detective (http://localhost:3334) |
 | `npm run detective:demo` | Detective en mode démo (auteurs fictifs pour la vue *team alignment*) |
-| `npm run demo:break-domain` | Violation : `ticketing` importe directement `luggage` |
-| `npm run demo:break-api` | Violation : `luggage` contourne l'API publique de `ticketing` |
-| `npm run demo:break-layer` | Violation : un composant UI injecte un store |
-| `npm run demo:break-naming` | Violation : `*-coordinator` renommé en `*-store` |
-| `npm run demo:reset` | Restaure les fichiers d'origine |
-| `npm run tickets` | Liste des tickets `ready`, au format JSON (utilisée par Sandcastle) |
-| `npm run sandcastle:build-image` | Construit l'image Docker de la sandbox |
-| `npm run sandcastle:smoke` | Boucle AFK limitée au ticket 002, un seul tour (test de coût) |
-| `npm run sandcastle` | Lance la boucle AFK complète (Docker requis, voir [docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)) |
 
 ---
 
@@ -92,21 +80,12 @@ Detective 2.1, Sandcastle 0.12, Vitest 5.
 ├── docs/
 │   ├── architecture/              # Règles détaillées (chargées à la demande)
 │   ├── adr/                       # Architecture Decision Records
-│   ├── domains/                   # Contexte métier par domaine
-│   └── run-sandcastle-wsl.md      # GitHub + Sandcastle depuis WSL (édition sous Windows)
-├── scripts/
-│   ├── run-checks.mjs             # Vérifications déterministes
-│   ├── hooks/                     # Adaptateurs de stop hooks
-│   ├── demo/scenario.mjs          # Violations volontaires pour la démo
-│   ├── copy-skills.mjs            # .agents/skills → .claude/skills
-│   ├── wsl/setup-wsl-clone.sh     # Crée la copie d'exécution WSL
-│   └── tickets.mjs                # Mini-tracker de tickets pour Sandcastle
-├── .claude/settings.json          # Déclaration du stop hook pour Claude Code
+│   └── domains/                   # Contexte métier par domaine
+├── .claude/
+│   ├── settings.json              # Stop hook pour Claude Code
+│   └── skills/                    # Skills (officiels Angular + maison)
 ├── .mcp.json                      # Serveurs MCP : angular-cli, detective
-├── .agents/skills/                # Skills (dossier canonique)
 ├── .detective/config.json         # Configuration de Detective
-├── .sandcastle/                   # Boucle AFK (prompts, Dockerfile, main.mts)
-├── tickets/                       # Backlog de tickets (story, scope, critères)
 └── src/app/
     ├── app.ts, app.routes.ts      # Shell : ne charge que des features
     └── domains/
@@ -265,7 +244,7 @@ tags domain:luggage, type:data   @softarc/sheriff/dependency-rule
 ```
 
 > 💡 **Performance** : sur une très grosse base de code, ESLint relit les fichiers à chaque
-> frappe. Le CLI `sheriff verify` est bien plus rapide : c'est lui qu'utilise `run-checks`.
+> frappe. Le CLI `sheriff verify` est bien plus rapide : c'est lui qu'utilise `npm run check`.
 
 ### À essayer : contourner l'API publique d'un domaine
 
@@ -300,8 +279,6 @@ publique** de ce domaine.
    porte les tags `domain:ticketing` et `type:util` : aucune de ces conditions n'est remplie.
 4. Remettre l'import d'origine : tout redevient vert.
 
-Version automatique : `npm run demo:break-api`, puis `npm run demo:reset`.
-
 ---
 
 ## 5. ArchUnitTS — conventions de nommage
@@ -328,9 +305,56 @@ exécuté avec Vitest via [`vitest.arch.config.mts`](vitest.arch.config.mts)
 npm run test:arch
 ```
 
+### À essayer : un store qui utilise un autre store
+
+On veut que le store du passager affiche « Alain · 2 vol(s) » et qu'il vide la sélection de vols
+quand on réinitialise le passager. Le réflexe est d'injecter `FlightStore` dans `PassengerStore` :
+
+```ts
+// src/app/domains/ticketing/feature-booking/passenger-store.ts
+import { computed, inject } from '@angular/core';
+import { patchState, signalStore, withComputed, withMethods, withState } from '@ngrx/signals';
+import { FlightStore } from './flight-store';
+
+export const PassengerStore = signalStore(
+  { providedIn: 'root' },
+  withState({ name: '' }),
+  withComputed((store, flights = inject(FlightStore)) => ({
+    // ❌ Un store lit l'état d'un autre store
+    bookingLabel: computed(() => `${store.name()} · ${flights.selectedFlights().length} vol(s)`),
+  })),
+  withMethods((store, flights = inject(FlightStore)) => ({
+    setName(name: string): void {
+      patchState(store, { name });
+    },
+    reset(): void {
+      patchState(store, { name: '' });
+      // ❌ Un store pilote un autre store
+      flights.clearSelection();
+    },
+  })),
+);
+```
+
+Avec `npm run check:full`, **seul ArchUnit échoue**. Sheriff ne voit rien, car les deux fichiers
+sont dans le même module, et le build passe, car le code est techniquement correct :
+
+```
+× un store ne doit jamais dépendre d'un autre store (utiliser un coordinator)
+  File: src/app/domains/ticketing/feature-booking/passenger-store.ts
+  Rule: Un store ne doit pas importer un autre store : créer un *-coordinator
+```
+
+Si l'on fait aussi dépendre `FlightStore` de `PassengerStore`, la règle « pas de cycles »
+échoue à son tour (`passenger-store.ts → flight-store.ts → passenger-store.ts`), et le build
+aussi : TypeScript ne sait plus typer deux stores qui se référencent mutuellement.
+
+**Solution conforme** : la logique qui combine plusieurs stores va dans un **coordinator**, comme
+`booking-summary-coordinator.ts`.
+
 ---
 
-## 6. Le modèle du gruyère et `run-checks`
+## 6. Le modèle du gruyère
 
 Métaphore empruntée à l'ingénierie de la sécurité : chaque tranche a des trous, mais pas aux
 mêmes endroits.
@@ -341,37 +365,15 @@ mêmes endroits.
 3. **ArchUnitTS** : conventions de nommage et règles d'accès.
 4. **Tests unitaires et build**.
 
-Les scénarios de démo montrent la complémentarité des tranches :
+Les deux exemples « À essayer » montrent la complémentarité des tranches :
 
-| Scénario | Sheriff | ArchUnitTS |
+| Violation | Sheriff | ArchUnitTS |
 |---|---|---|
-| `demo:break-domain` (ticketing importe luggage) | ❌ détecté | ✅ ne voit rien |
-| `demo:break-api` (luggage contourne l'API de ticketing) | ❌ détecté | ✅ ne voit rien |
-| `demo:break-layer` (un composant UI injecte un store) | ❌ détecté | ❌ détecté |
-| `demo:break-naming` (coordinator renommé en store) | ✅ ne voit rien | ❌ détecté |
+| `luggage` contourne l'API publique de `ticketing` (section 4) | ❌ détecté | ✅ ne voit rien |
+| Un store utilise un autre store (section 5) | ✅ ne voit rien | ❌ détecté |
 
-[`scripts/run-checks.mjs`](scripts/run-checks.mjs) regroupe ces tranches :
-
-- les étapes **rapides** (`sheriff:verify`, `lint`, `test:arch`) sont utilisées par le stop hook ;
-- les étapes **lentes** (`test`, `build`) sont ajoutées avec `--full`.
-
-### Pourquoi un script plutôt qu'une chaîne de scripts npm ?
-
-Pour un humain, `npm run sheriff:verify && npm run lint && npm run test:arch` suffirait. Les
-**commandes** restent d'ailleurs définies à un seul endroit : les scripts npm de
-`package.json`. `run-checks.mjs` ne fait qu'**appeler ces scripts** (`npm run --silent <script>`)
-et ajoute ce qu'une chaîne `&&` ne sait pas faire :
-
-1. **Exécuter toutes les étapes, même après un échec.** `&&` s'arrête à la première erreur ;
-   l'agent ne découvrirait les autres problèmes qu'au tour suivant, ce qui coûte des tokens.
-2. **Produire un message court pour l'agent** : ce qui a échoué, les dernières lignes de sortie
-   et la consigne « corrige le code, pas les règles » (`--quiet`, stop hooks).
-3. **Être réutilisé** par le CLI, la CI et les deux adaptateurs de stop hooks : la fonction
-   `runChecks({ full, capture })` est exportée.
-
-Pour changer une commande (options d'ESLint, configuration Vitest…), modifiez **uniquement**
-`package.json`. Pour ajouter une étape, créez le script npm puis ajoutez une ligne
-`{ name, script }` dans `FAST_STEPS` ou `SLOW_STEPS`.
+`npm run check` enchaîne les tranches automatiques avec `&&` : `sheriff:verify`, puis `lint`,
+puis `test:arch`. La chaîne s'arrête à la première étape en échec.
 
 ---
 
@@ -382,39 +384,34 @@ vérifications échouent, le message d'erreur est renvoyé au modèle, qui doit 
 
 Chaque agent a sa propre configuration et son propre contrat de retour :
 
-| Agent | Succès | Échec | Adaptateur |
-|---|---|---|---|
-| Claude Code, Codex | exit 0 | exit **2** + message sur **stderr** | [`stop-hook-exit-code.mjs`](scripts/hooks/stop-hook-exit-code.mjs) |
-| Cursor, Antigravity… | exit 0 + `{}` sur stdout | exit 0 + **JSON** avec la raison | [`stop-hook-json.mjs`](scripts/hooks/stop-hook-json.mjs) |
-
-Le principe : **une seule implémentation des vérifications** (`run-checks.mjs`) et de petits
-**adaptateurs** par famille d'agents.
+| Agent | Succès | Échec |
+|---|---|---|
+| Claude Code, Codex | exit 0 | exit **2** + message sur **stderr** |
+| Cursor, Antigravity… | exit 0 + `{}` sur stdout | exit 0 + **JSON** avec la raison |
 
 ### Claude Code : [`.claude/settings.json`](.claude/settings.json)
+
+Le hook réutilise simplement `npm run check` :
 
 ```json
 {
   "hooks": {
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node scripts/hooks/stop-hook-exit-code.mjs", "timeout": 180 }] }
+      { "hooks": [{ "type": "command", "command": "npm run --silent check 1>&2 || exit 2", "timeout": 180 }] }
     ]
   }
 }
 ```
 
-**Garde-fou anti-boucle** : après 3 échecs consécutifs, le hook laisse l'agent s'arrêter et
-demande une intervention humaine. Le compteur est stocké dans `node_modules/.cache/stop-hook`.
+- `1>&2` envoie la sortie des vérifications sur **stderr** : c'est ce texte que Claude Code
+  renvoie au modèle.
+- `|| exit 2` transforme n'importe quel échec en code **2**, qui signifie « tu n'as pas
+  terminé, corrige ».
 
-> ⚠️ Le JSON produit par `stop-hook-json.mjs` est **générique**. Adaptez la fonction
-> `toAgentResponse()` au format exact attendu par votre agent et sa version (voir sa
-> documentation).
-
-Pour tester le hook à la main :
+Pour tester le contrat à la main (Git Bash ou WSL), après avoir introduit une violation :
 
 ```bash
-npm run demo:break-naming
-echo '{}' | node scripts/hooks/stop-hook-exit-code.mjs; echo "exit=$?"   # → exit=2 + rapport
-npm run demo:reset
+bash -c 'npm run --silent check 1>&2 || exit 2'; echo "exit=$?"   # → rapport d'erreur, exit=2
 ```
 
 ---
@@ -460,27 +457,21 @@ C'est aussi de la progressive disclosure.
 
 | Skill | Origine | Rôle |
 |---|---|---|
-| `angular-developer`, `angular-new-app` | Officiels Angular | Angular moderne (signals, control flow…), indépendamment de la date d'entraînement du modèle |
+| `angular-developer` | Officiel Angular | Angular moderne (signals, control flow…), indépendamment de la date d'entraînement du modèle |
 | `architecture-review` | Maison | Revue au regard des règles du projet, plus `npm run check` |
 | `domain-boundaries-review` | Maison | Sémantique DDD et analyse forensique via le MCP Detective |
-| `refine-ticket` | Maison (inspiré de *grill me* de Matt Pocock) | Questions jusqu'à compréhension partagée, puis décisions écrites dans le ticket |
 
 ### Installer ou mettre à jour les skills officiels Angular
 
 ```bash
-npx skills add https://github.com/angular/skills -s '*' -a codex -y --copy
+npx skills add https://github.com/angular/skills -s angular-developer -a claude-code -y --copy
 ```
 
 `npx skills` est une sorte de « npm pour les skills ». La version installée est tracée dans
 `skills-lock.json`.
 
-### `.agents/skills` → `.claude/skills`
-
-Le dossier **canonique** est `.agents/skills`, mais Claude Code lit `.claude/skills`.
-[`scripts/copy-skills.mjs`](scripts/copy-skills.mjs) recopie l'un dans l'autre à chaque
-`npm install` (script `prepare`), ou à la demande avec `npm run skills:sync`. On copie plutôt que
-de créer des liens symboliques, plus fragiles sous Windows et Git Bash. `.claude/skills/` est
-ignoré par git.
+Les skills sont versionnés dans `.claude/skills/`, le dossier lu par Claude Code. D'autres
+agents utilisent `.agents/skills/` : `npx skills` sait installer dans l'un, l'autre ou les deux.
 
 > Réflexe recommandé : quand vous installez une bibliothèque (composants, graphiques…),
 > vérifiez si elle publie des skills.
@@ -539,113 +530,21 @@ En mode MCP (`--mcp`), Detective expose notamment les outils `modules_get`, `cou
 
 ---
 
-## 11. Loop engineering avec Sandcastle
-
-Le principe est le « loin du clavier » (AFK) : on prépare un backlog, on lance la boucle, on
-revient relire les commits.
-
-```
-ticket suivant → branche (git worktree) → implémentation → revue par une autre session → fusion
-```
-
-La **revue automatique par une autre session** est ce qui fait la qualité. Selon l'expérience
-présentée dans le webinar, même un petit modèle rapide obtient de bons résultats grâce à elle.
-
-### Étape 1 : affiner les tickets (avant de partir)
-
-Les questions doivent être posées **avant** la boucle. Le format de ticket est inspiré de
-l'agilité : la story est une invitation à la conversation.
-
-```
-tickets/NNN-*.md
----
-id / title / status (draft | ready | done) / depends_on
----
-## Story   ## Scope   ## Critères d'acceptation   ## Décisions
-```
-
-Dans Claude Code : `refine ticket 004`. L'agent demande s'il faut passer par l'**API du domaine
-ticketing** ou par `shared`, puis consigne la réponse dans `## Décisions`.
-`refine ticket 005` doit, lui, être **refusé**, car ce ticket demande de renommer un coordinator
-en store.
-
-### Étape 2 : lancer la boucle
-
-[Sandcastle](https://github.com/mattpocock/sandcastle) (`@ai-hero/sandcastle`) a été initialisé
-avec le template **`parallel-planner-with-review`** :
-
-1. un **planificateur** lit les tickets `ready`, construit le graphe de dépendances et
-   sélectionne ceux qui peuvent avancer en parallèle (ici 001 et 002 ; 003 dépend de 001) ;
-2. pour chaque ticket : sandbox Docker, **worktree** et branche dédiés, **implémentation**, puis
-   **revue** dans la même sandbox ;
-3. une **fusion** des branches qui ont produit des commits, avec fermeture des tickets ;
-4. on recommence tant qu'il reste des tickets débloqués.
-
-Le tracker « Custom » de Sandcastle a été branché sur le dossier `tickets/` via
-[`scripts/tickets.mjs`](scripts/tickets.mjs) (`list`, `view`, `close`). Les prompts
-(`.sandcastle/*-prompt.md`) imposent de lire `AGENTS.md` et de faire passer
-`npm run check:full`.
-
-### Exécution
-
-Sandcastle a besoin de Docker. Le dépôt de référence est sur **GitHub** : on édite sous Windows et
-on lance Sandcastle depuis un **second clone dans WSL**. La procédure complète, y compris la
-publication initiale sur GitHub, est dans **[docs/run-sandcastle-wsl.md](docs/run-sandcastle-wsl.md)**.
-En résumé :
-
-```bash
-bash /mnt/c/…/flight-arch-demo/scripts/wsl/setup-wsl-clone.sh https://github.com/<compte>/<depot>.git ~/work/flight-arch-demo
-cd ~/work/flight-arch-demo
-# renseigner .sandcastle/.env : CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ou ANTHROPIC_API_KEY
-npm run sandcastle:build-image
-git switch -c afk-demo
-npm run sandcastle:smoke      # un ticket, un tour : mesurer le coût
-npm run sandcastle            # run complet
-git push -u origin afk-demo   # puis pull request afk-demo → main sur GitHub
-```
-
-### Maîtrise de la consommation de tokens
-
-Chaque session d'agent relit tout son contexte à chaque tour. Le backlog de démo déclenche environ
-**11 sessions** (6 au tour 1, 4 au tour 2, 1 au tour 3). Réglages appliqués dans
-`.sandcastle/main.mts` :
-
-| Réglage | Valeur | Surcharge |
-|---|---|---|
-| Tours plan → implement → merge | 3 (le template en prévoyait 10) | `SANDCASTLE_MAX_ROUNDS` |
-| Relances max de l'implémenteur | 5 (le template en prévoyait 100) | `SANDCASTLE_IMPLEMENTER_MAX_ITERATIONS` |
-| Modèles | Opus pour l'implémentation, Sonnet pour le plan, la relecture et la fusion | `SANDCASTLE_{PLANNER,IMPLEMENTER,REVIEWER,MERGER}_MODEL` |
-| Tickets ciblés | tous | `--only=002` (script `sandcastle:smoke`) |
-
-S'y ajoutent :
-
-- des vérifications silencieuses (`check:full:quiet`) dans les prompts ;
-- le serveur MCP Detective désactivé dans l'image de la sandbox ;
-- un **rapport de consommation** par session en fin de run, également écrit dans
-  `.sandcastle/logs/usage-report.json`.
-
-> 💰 Avec un jeton d'abonnement (`CLAUDE_CODE_OAUTH_TOKEN`), la consommation est décomptée des
-> limites de votre abonnement. Avec une **clé API**, elle est facturée à l'usage.
-
----
-
-## 12. Script de démonstration (≈ 30 min)
+## 11. Script de démonstration (≈ 30 min)
 
 | # | Durée | Action | Message clé |
 |---|---|---|---|
 | 1 | 3 min | Montrer l'app (`npm start`) puis l'arborescence `src/app/domains` | Verticales, couches, localité (`flight-store` reste dans sa feature, `flight-client` descendu dans `data`) |
 | 2 | 3 min | Ouvrir `sheriff.config.ts`, lancer `npx sheriff list` | Tags par placeholders, règles concises |
-| 3 | 4 min | Modifier à la main l'import de `luggage-list-page.ts` (section 4, « À essayer »), constater le soulignement rouge dans l'IDE, puis `npm run check` | Même fonction, autre chemin : Sheriff refuse le contournement de l'API. Ensuite `npm run demo:break-domain` pour un second exemple. `npm run demo:reset` |
-| 4 | 3 min | `npm run demo:break-naming` puis `npm run check` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. `npm run demo:reset` |
-| 5 | 2 min | `npm run demo:break-layer` puis `npm run check` | Les deux tranches détectent. `npm run demo:reset` |
-| 6 | 4 min | Montrer `AGENTS.md` puis `docs/architecture/*`, `.claude/settings.json` et le hook | Progressive disclosure, consignes non négociables, contrat exit 2 / stderr |
-| 7 | 4 min | Dans Claude Code : *« Renomme booking-summary-coordinator en booking-summary-store »* | L'agent lit `state-management.md` et **refuse**. Variante : désactiver la consigne pour montrer le stop hook qui le renvoie au travail |
-| 8 | 4 min | `npm run detective` (vues coupling, team alignment) ; dans Claude Code : *« Review the domain boundaries »* | Skill et MCP Detective : rapport de revue |
-| 9 | 3 min | `refine ticket 004`, puis présenter `.sandcastle/main.mts` (et `npm run sandcastle` si Docker est disponible) | Questions avant la boucle, puis boucle AFK avec revue |
+| 3 | 4 min | Modifier l'import de `luggage-list-page.ts` (section 4, « À essayer »), constater le soulignement rouge dans l'IDE, puis `npm run check` | Même fonction, autre chemin : Sheriff refuse le contournement de l'API |
+| 4 | 4 min | Faire utiliser `FlightStore` par `PassengerStore` (section 5, « À essayer »), puis `npm run test:arch` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. Montrer le coordinator comme solution |
+| 5 | 4 min | Montrer `AGENTS.md` puis `docs/architecture/*`, `.claude/settings.json` et le hook | Progressive disclosure, consignes non négociables, contrat exit 2 / stderr |
+| 6 | 4 min | Dans Claude Code : *« Renomme booking-summary-coordinator en booking-summary-store »* | L'agent lit `state-management.md` et **refuse**. Variante : désactiver la consigne pour montrer le stop hook qui le renvoie au travail |
+| 7 | 4 min | `npm run detective` (vues coupling, team alignment) ; dans Claude Code : *« Review the domain boundaries »* | Skill et MCP Detective : rapport de revue |
 
 ---
 
-## 13. Appliquer à un projet existant
+## 12. Appliquer à un projet existant
 
 1. **Commencer par l'analyse** : lancer Detective et le skill `domain-boundaries-review` pour
    repérer où des verticales apporteraient le plus.
@@ -656,30 +555,25 @@ S'y ajoutent :
 3. **Écrire les règles pour les humains et l'IA** : un `AGENTS.md` court et des documents
    détaillés, qui doivent rester **cohérents avec la configuration Sheriff et les tests
    ArchUnit**.
-4. **Brancher `run-checks` en CI** et en stop hook.
+4. **Brancher `npm run check:full` en CI** et `npm run check` en stop hook.
 5. Les couches proposées sont une **règle empirique**, pas une loi de la nature. Les ajuster
    (par exemple une couche `sub-feature`) est possible, à condition que ce soit une **décision
    délibérée**, prise en équipe et consignée dans un ADR.
 
 ---
 
-## 14. Limites et points d'attention
+## 13. Limites et points d'attention
 
 - **Formats des hooks** : le contrat exit 2 / stderr de Claude Code est utilisé tel quel. Le
-  format JSON des autres agents doit être vérifié dans leur documentation. Aucun fichier de
-  configuration Codex, Cursor ou Antigravity n'est fourni.
-- **Boucle infinie** : un stop hook qui échoue toujours peut relancer l'agent sans fin. C'est
-  pourquoi l'adaptateur s'arrête après 3 tentatives.
-- **Coût des tokens** : les boucles AFK et les revues multiplient les appels.
-- **Sandcastle** : la configuration est en place et le point d'entrée compile, mais la boucle n'a
-  pas été exécutée de bout en bout (elle nécessite Docker, un accès à Docker Hub et un jeton).
-  Commencez par `npm run sandcastle:smoke` et lisez le rapport de consommation avant un run
-  complet.
+  format JSON des autres agents doit être vérifié dans leur documentation. Seule la configuration
+  Claude Code est fournie.
+- **Boucle infinie** : un stop hook qui échoue toujours relance l'agent à chaque tentative.
+  Le hook de démo n'a pas de limite : interrompez l'agent s'il tourne en rond.
 - **Le fichier `shared`** doit être surveillé : c'est la principale source de dérive.
 
 ---
 
-## 15. Références
+## 14. Références
 
 - Webinar : *AI-assisted development without destroying your architecture*, Manfred Steyer
   (Angular Architects)
@@ -687,5 +581,4 @@ S'y ajoutent :
 - ArchUnitTS : https://lukasniessen.github.io/ArchUnitTS/
 - Detective : https://github.com/angular-architects/detective
 - NgRx Signal Store : https://ngrx.io/guide/signals/signal-store
-- Sandcastle : https://github.com/mattpocock/sandcastle
 - Skills officiels Angular : https://angular.dev/ai/agent-skills

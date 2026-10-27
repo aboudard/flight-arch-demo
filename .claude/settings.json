@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node scripts/hooks/stop-hook-exit-code.mjs",
+            "command": "npm run --silent check 1>&2 || exit 2",
             "timeout": 180
           }
         ]
