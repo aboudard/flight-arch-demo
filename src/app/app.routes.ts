@@ -10,10 +10,10 @@ export const routes: Routes = [
       ),
   },
   {
-    path: 'booking-summary',
+    path: 'booking',
     loadComponent: () =>
-      import('./domains/ticketing/feature-booking/booking-summary/booking-summary-page').then(
-        (m) => m.BookingSummaryPage,
+      import('./domains/ticketing/feature-booking/flight-booking/flight-booking-page').then(
+        (m) => m.FlightBookingPage,
       ),
   },
   {

@@ -7,5 +7,7 @@
  * on n'expose que le strict nécessaire, de façon délibérée.
  */
 export type { Flight } from '../data/flight';
-export { FlightCard } from '../ui-flight/flight-card';
+export type { Ticket } from '../data/ticket';
+// Le domaine luggage lit les billets pour connaître les bagages déclarés à la réservation.
+export { TicketClient } from '../data/ticket-client';
 export { formatRoute } from '../util-format/format-route';

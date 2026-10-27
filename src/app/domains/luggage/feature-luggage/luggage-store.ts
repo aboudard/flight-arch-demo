@@ -15,6 +15,13 @@ export const LuggageStore = signalStore(
         tap((items) => patchState(store, { items, loading: false })),
       ),
     ),
+    markLoaded: rxMethod<string>(
+      pipe(
+        switchMap((id) => client.setStatus(id, 'loaded')),
+        switchMap(() => client.findAll()),
+        tap((items) => patchState(store, { items })),
+      ),
+    ),
   })),
   withHooks({ onInit: (store) => store.load() }),
 );

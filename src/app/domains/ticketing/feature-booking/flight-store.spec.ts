@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { of } from 'rxjs';
-import { FlightClient } from '../data/flight-client';
+import { FlightClient } from './flight-client';
 import { FlightStore } from './flight-store';
 
 describe('FlightStore', () => {
@@ -12,15 +12,15 @@ describe('FlightStore', () => {
     });
   });
 
-  it('charge les vols et gère la sélection', () => {
+  it('charge les vols et mémorise le vol choisi', () => {
     const store = TestBed.inject(FlightStore);
     store.load();
     expect(store.flights()).toEqual([flight]);
 
-    store.toggleSelected(1);
-    expect(store.selectedFlights()).toEqual([flight]);
+    store.selectFlight(1);
+    expect(store.selectedFlight()).toEqual(flight);
 
-    store.toggleSelected(1);
-    expect(store.selectedFlights()).toEqual([]);
+    store.clearSelection();
+    expect(store.selectedFlight()).toBeNull();
   });
 });

@@ -90,22 +90,36 @@ Detective 2.1, Vitest 5.
     ├── app.ts, app.routes.ts      # Shell : ne charge que des features
     └── domains/
         ├── ticketing/             # Domaine principal
-        │   ├── feature-booking/       flight-search, booking-summary, flight-store, passenger-store
+        │   ├── feature-booking/       flight-search, flight-store, flight-client,
+        │   │                          flight-booking-page, booking-coordinator, passenger-store
         │   ├── feature-my-tickets/    my-tickets-page, ticket-store
         │   ├── ui-flight/             flight-card (dumb)
-        │   ├── data/                  flight-client, flight (modèle)
+        │   ├── data/                  ticket-client, flight, ticket (modèles)
         │   ├── util-format/           format-route
         │   └── api/                   ticketing-api.ts (API publique du domaine)
         ├── luggage/
         │   ├── feature-luggage/       luggage-list-page, luggage-store
         │   └── data/                  luggage-client, luggage
         └── shared/
-            ├── ui-design/             status-badge
+            ├── ui-design/             page-header, status-badge
             └── util-config/           simulated-latency
 ```
 
 L'application tourne sans backend : les clients renvoient des données en mémoire avec une
-latence simulée.
+latence simulée. Chaque écran affiche en en-tête son domaine et sa feature.
+
+### Les écrans
+
+| Écran | Domaine · feature | Ce qu'on y fait |
+|---|---|---|
+| 1. Rechercher | `ticketing` · `feature-booking` | Chercher un trajet, puis « Réserver ce vol » |
+| 2. Réserver | `ticketing` · `feature-booking` | Saisir le passager et ses bagages en soute pour **ce** vol, puis confirmer : un billet est créé |
+| 3. Mes billets | `ticketing` · `feature-my-tickets` | Voir tous les billets (passager, vol, bagages) ; le billet confirmé est mis en évidence |
+| Bagages | `luggage` · `feature-luggage` | Vue de l'agent d'aéroport : les bagages déclarés à la réservation, à charger en soute |
+
+Le dernier écran illustre la collaboration entre domaines : `luggage` lit les billets de
+`ticketing` **uniquement via son API publique**, et garde ses propres données (le statut des
+bagages).
 
 ---
 
@@ -135,10 +149,12 @@ doit rester **petit et technique**, sinon il devient un fourre-tout.
 
 **Principe de localité** : *aussi local que possible, aussi global que nécessaire.*
 
-- `flight-store.ts` sert une seule feature : il reste **dans** `feature-booking`.
-- `flight-client.ts` sert **deux** features (`booking` et `my-tickets`) : il a été descendu
-  dans `ticketing/data`.
-- `luggage` a besoin d'éléments de `ticketing` : il passe **uniquement** par
+- `flight-store.ts` et `flight-client.ts` ne servent qu'à la recherche : ils restent **dans**
+  `feature-booking`.
+- `ticket-client.ts` sert **deux** features (`booking` crée les billets, `my-tickets` les liste) :
+  il a été descendu dans `ticketing/data`.
+- `flight-card.ts` est affiché par les trois écrans du voyageur : il est dans `ticketing/ui-flight`.
+- `luggage` a besoin des billets de `ticketing` : il passe **uniquement** par
   `ticketing/api/ticketing-api.ts`. C'est une API publique minimale, qui doit rester
   rétrocompatible.
 
@@ -149,10 +165,10 @@ propres conventions, plus riches en sens** :
 
 | Suffixe | Rôle | Exemple |
 |---|---|---|
-| `-page`, `-search`, `-edit` | Composant smart | `flight-search.ts`, `booking-summary-page.ts` |
+| `-page`, `-search`, `-edit` | Composant smart | `flight-search.ts`, `flight-booking-page.ts` |
 | `-store` | NgRx Signal Store | `flight-store.ts` |
-| `-client` | Accès aux données | `flight-client.ts` |
-| `-coordinator` | Orchestre plusieurs stores | `booking-summary-coordinator.ts` |
+| `-client` | Accès aux données | `flight-client.ts`, `ticket-client.ts` |
+| `-coordinator` | Orchestre plusieurs stores | `booking-coordinator.ts` |
 
 ### 3.4 NgRx Signal Store
 
@@ -163,8 +179,9 @@ Les stores utilisent `signalStore`, `withState`, `withComputed`, `withMethods`, 
   `FlightStore`).
 - Un store lié à un écran est fourni dans les `providers` du composant (exemple : `TicketStore`).
 - Ces stores sont des services légers. Quand un cas d'usage en combine plusieurs, on passe par
-  un **coordinator** (`BookingSummaryCoordinator`) plutôt que de faire dépendre un store d'un
-  autre.
+  un **coordinator** plutôt que de faire dépendre un store d'un autre. Exemple :
+  `BookingCoordinator` combine le vol choisi (`FlightStore`) et le passager (`PassengerStore`)
+  pour créer le billet.
 
 ---
 
@@ -307,37 +324,34 @@ npm run test:arch
 
 ### À essayer : un store qui utilise un autre store
 
-On veut que le store du passager affiche « Alain · 2 vol(s) » et qu'il vide la sélection de vols
-quand on réinitialise le passager. Le réflexe est d'injecter `FlightStore` dans `PassengerStore` :
+Aujourd'hui, `BookingCoordinator` combine deux stores : il prend le vol choisi dans `FlightStore`
+et le passe à `PassengerStore` pour créer le billet. Un raccourci tentant consiste à supprimer cet
+intermédiaire : `PassengerStore` irait lui-même chercher le vol choisi dans `FlightStore`.
+
+Dans `src/app/domains/ticketing/feature-booking/passenger-store.ts`, remplacer la méthode `book` :
 
 ```ts
-// src/app/domains/ticketing/feature-booking/passenger-store.ts
-import { computed, inject } from '@angular/core';
-import { patchState, signalStore, withComputed, withMethods, withState } from '@ngrx/signals';
 import { FlightStore } from './flight-store';
-
-export const PassengerStore = signalStore(
-  { providedIn: 'root' },
-  withState({ name: '' }),
-  withComputed((store, flights = inject(FlightStore)) => ({
-    // ❌ Un store lit l'état d'un autre store
-    bookingLabel: computed(() => `${store.name()} · ${flights.selectedFlights().length} vol(s)`),
-  })),
-  withMethods((store, flights = inject(FlightStore)) => ({
-    setName(name: string): void {
-      patchState(store, { name });
-    },
-    reset(): void {
-      patchState(store, { name: '' });
-      // ❌ Un store pilote un autre store
-      flights.clearSelection();
-    },
-  })),
-);
+// …
+withMethods((store, client = inject(TicketClient), flights = inject(FlightStore)) => ({
+  // … setName, setBags, reset inchangés
+  // ❌ Le store lit le vol choisi dans un autre store, puis le modifie
+  async book(): Promise<Ticket | null> {
+    const flight = flights.selectedFlight();
+    if (!flight) return null;
+    patchState(store, { saving: true });
+    const ticket = await firstValueFrom(client.book(flight, store.name().trim(), store.bags()));
+    patchState(store, { saving: false });
+    flights.clearSelection();
+    return ticket;
+  },
+})),
 ```
 
-Avec `npm run check:full`, **seul ArchUnit échoue**. Sheriff ne voit rien, car les deux fichiers
-sont dans le même module, et le build passe, car le code est techniquement correct :
+Puis adapter l'appel dans `booking-coordinator.ts` : `const ticket = await this.passenger.book();`.
+
+Résultat : Sheriff, ESLint et le build passent, car les deux fichiers sont dans le même module et
+le code est techniquement correct. **Seul `npm run test:arch` échoue** :
 
 ```
 × un store ne doit jamais dépendre d'un autre store (utiliser un coordinator)
@@ -345,12 +359,11 @@ sont dans le même module, et le build passe, car le code est techniquement corr
   Rule: Un store ne doit pas importer un autre store : créer un *-coordinator
 ```
 
-Si l'on fait aussi dépendre `FlightStore` de `PassengerStore`, la règle « pas de cycles »
-échoue à son tour (`passenger-store.ts → flight-store.ts → passenger-store.ts`), et le build
-aussi : TypeScript ne sait plus typer deux stores qui se référencent mutuellement.
+Si l'on fait aussi dépendre `FlightStore` de `PassengerStore`, la règle « pas de cycles » échoue à
+son tour (`passenger-store.ts → flight-store.ts → passenger-store.ts`).
 
-**Solution conforme** : la logique qui combine plusieurs stores va dans un **coordinator**, comme
-`booking-summary-coordinator.ts`.
+**Solution conforme** : c'est exactement le rôle de `booking-coordinator.ts`. La logique qui
+combine plusieurs stores va dans un **coordinator**, et chaque store reste indépendant.
 
 ---
 
@@ -534,12 +547,12 @@ En mode MCP (`--mcp`), Detective expose notamment les outils `modules_get`, `cou
 
 | # | Durée | Action | Message clé |
 |---|---|---|---|
-| 1 | 3 min | Montrer l'app (`npm start`) puis l'arborescence `src/app/domains` | Verticales, couches, localité (`flight-store` reste dans sa feature, `flight-client` descendu dans `data`) |
+| 1 | 3 min | Parcourir l'app (`npm start`) : rechercher, réserver un vol avec 2 bagages, voir le billet, puis charger les bagages dans l'écran Bagages. Montrer ensuite l'arborescence `src/app/domains` | Deux domaines qui collaborent ; localité (`flight-client` reste dans sa feature, `ticket-client` descendu dans `data`) |
 | 2 | 3 min | Ouvrir `sheriff.config.ts`, lancer `npx sheriff list` | Tags par placeholders, règles concises |
 | 3 | 4 min | Modifier l'import de `luggage-list-page.ts` (section 4, « À essayer »), constater le soulignement rouge dans l'IDE, puis `npm run check` | Même fonction, autre chemin : Sheriff refuse le contournement de l'API |
-| 4 | 4 min | Faire utiliser `FlightStore` par `PassengerStore` (section 5, « À essayer »), puis `npm run test:arch` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. Montrer le coordinator comme solution |
+| 4 | 4 min | Faire lire `FlightStore` par `PassengerStore` (section 5, « À essayer »), puis `npm run test:arch` | ArchUnit détecte, Sheriff ne voit rien : le **gruyère**. Montrer `booking-coordinator.ts` comme solution |
 | 5 | 4 min | Montrer `AGENTS.md` puis `docs/architecture/*`, `.claude/settings.json` et le hook | Progressive disclosure, consignes non négociables, contrat exit 2 / stderr |
-| 6 | 4 min | Dans Claude Code : *« Renomme booking-summary-coordinator en booking-summary-store »* | L'agent lit `state-management.md` et **refuse**. Variante : désactiver la consigne pour montrer le stop hook qui le renvoie au travail |
+| 6 | 4 min | Dans Claude Code : *« Renomme booking-coordinator en booking-store »* | L'agent lit `state-management.md` et **refuse**. Variante : désactiver la consigne pour montrer le stop hook qui le renvoie au travail |
 | 7 | 4 min | `npm run detective` (vues coupling, team alignment) ; dans Claude Code : *« Review the domain boundaries »* | Skill et MCP Detective : rapport de revue |
 
 ---

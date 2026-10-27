@@ -1,7 +1,7 @@
 import { Service } from '@angular/core';
 import { delay, Observable, of } from 'rxjs';
 import { SIMULATED_LATENCY_MS } from '../../shared/util-config/simulated-latency';
-import { Flight } from './flight';
+import { Flight } from '../data/flight';
 
 const FLIGHTS: Flight[] = [
   { id: 1, from: 'Paris', to: 'Vienne', date: '2026-11-02T08:30', delayed: false },
@@ -11,23 +11,18 @@ const FLIGHTS: Flight[] = [
 ];
 
 /**
- * Accès aux données (suffixe « -client »).
- * Placé dans la couche `data` du domaine car utilisé par DEUX features
- * (booking et my-tickets) : il a été « descendu » d'un niveau.
+ * Accès au catalogue de vols (suffixe « -client »).
+ * Seul un store a le droit de l'utiliser (test d'architecture).
+ *
+ * Principe de localité : il n'est utilisé que par la feature booking, il reste
+ * donc DANS cette feature. Il ne descendra dans `data` que si une seconde
+ * feature en a besoin (comme ticket-client).
  */
 @Service()
 export class FlightClient {
   find(from: string, to: string): Observable<Flight[]> {
-    const result = FLIGHTS.filter(
-      (f) => matches(f.from, from) && matches(f.to, to),
-    );
+    const result = FLIGHTS.filter((f) => matches(f.from, from) && matches(f.to, to));
     return of(result).pipe(delay(SIMULATED_LATENCY_MS));
-  }
-
-  findByIds(ids: number[]): Observable<Flight[]> {
-    return of(FLIGHTS.filter((f) => ids.includes(f.id))).pipe(
-      delay(SIMULATED_LATENCY_MS),
-    );
   }
 }
 
