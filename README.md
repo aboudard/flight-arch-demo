@@ -546,19 +546,22 @@ En mode MCP (`--mcp`), Detective expose notamment les outils `modules_get`, `cou
 
 ## 12. Appliquer à un projet existant
 
-1. **Commencer par l'analyse** : lancer Detective et le skill `domain-boundaries-review` pour
-   repérer où des verticales apporteraient le plus.
-2. **Adopter Sheriff progressivement** :
-   - commencer par `npx sheriff init` (étiquetage automatique, sans règles) ;
-   - utiliser `noTag` dans les `depRules` pour tolérer l'existant ;
-   - resserrer domaine par domaine. Jamais de big bang.
-3. **Écrire les règles pour les humains et l'IA** : un `AGENTS.md` court et des documents
-   détaillés, qui doivent rester **cohérents avec la configuration Sheriff et les tests
-   ArchUnit**.
-4. **Brancher `npm run check:full` en CI** et `npm run check` en stop hook.
-5. Les couches proposées sont une **règle empirique**, pas une loi de la nature. Les ajuster
-   (par exemple une couche `sub-feature`) est possible, à condition que ce soit une **décision
-   délibérée**, prise en équipe et consignée dans un ADR.
+1. **Installer les outils** dans le projet :
+   `npm i -D @softarc/sheriff-core @softarc/eslint-plugin-sheriff archunit @softarc/detective`.
+2. **Analyser l'existant avec Detective** : `npx detective` (interface web). Les vues
+   *coupling*, *change coupling* et *hotspots* montrent où des verticales apporteraient le plus.
+   Pour faire faire cette analyse par l'agent, copiez depuis cette démo le skill
+   `.claude/skills/domain-boundaries-review/` et l'entrée `detective` de `.mcp.json`.
+3. **Adopter Sheriff progressivement** : `npx sheriff init` (étiquetage automatique, sans
+   règles), tolérer l'existant avec `noTag` dans les `depRules`, puis resserrer domaine par
+   domaine. Jamais de big bang.
+4. **Écrire les règles** : un `AGENTS.md` court et des documents détaillés, cohérents avec la
+   configuration Sheriff et les tests ArchUnit (inspirez-vous de `docs/` et
+   `architecture/` de cette démo).
+5. **Automatiser** : `npm run check:full` en CI et `npm run check` en stop hook.
+
+Les couches proposées sont une **règle empirique** : les adapter est possible, à condition que
+ce soit une décision délibérée, consignée dans un ADR.
 
 ---
 
@@ -569,7 +572,11 @@ En mode MCP (`--mcp`), Detective expose notamment les outils `modules_get`, `cou
   Claude Code est fournie.
 - **Boucle infinie** : un stop hook qui échoue toujours relance l'agent à chaque tentative.
   Le hook de démo n'a pas de limite : interrompez l'agent s'il tourne en rond.
-- **Le fichier `shared`** doit être surveillé : c'est la principale source de dérive.
+- **Le dossier `domains/shared`** doit être surveillé : c'est la principale source de dérive.
+  Comme tous les domaines ont le droit d'y accéder, y déplacer du code est le moyen le plus
+  simple de contourner une règle Sheriff. Si l'on n'y prend pas garde, la logique métier y migre
+  peu à peu, et le découpage en domaines perd son sens. D'où la consigne de `AGENTS.md` : pas
+  d'ajout dans `shared` sans accord explicite.
 
 ---
 
